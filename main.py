@@ -199,17 +199,55 @@ def get_season_main_stats(
     ridercoastid: int = None
 ):
     query = """
-        SELECT *
-        FROM dbo.vw_SeasonMainEventStats
-        WHERE Year = :year
-          AND SportID = :sportid
-          AND ClassID = :classid
+        WITH MainStats AS (
+            SELECT *
+            FROM dbo.vw_SeasonMainEventStats
+            WHERE Year = :year
+              AND SportID = :sportid
+              AND ClassID = :classid
+        ),
+        BrandAgg AS (
+            SELECT
+                rt.Year,
+                1 AS SportID,
+                sm.ClassID,
+                sm.RiderID,
+                MAX(sm.Brand) AS Brand,
+                COALESCE(sm.RiderCoastID, cp.RiderCoastID) AS RiderCoastID
+            FROM SX_MAINS sm
+            JOIN Race_Table rt
+                ON rt.RaceID = sm.RaceID
+            LEFT JOIN CoastPool cp
+                ON cp.RiderID = sm.RiderID
+               AND cp.[Year] = rt.[Year]
+            WHERE rt.Year = :year
+              AND rt.SportID = :sportid
+              AND sm.ClassID = :classid
+            GROUP BY
+                rt.Year,
+                sm.ClassID,
+                sm.RiderID,
+                COALESCE(sm.RiderCoastID, cp.RiderCoastID)
+        )
+        SELECT
+            ms.*,
+            ba.Brand
+        FROM MainStats ms
+        LEFT JOIN BrandAgg ba
+            ON ba.Year = ms.Year
+           AND ba.SportID = ms.SportID
+           AND ba.ClassID = ms.ClassID
+           AND ba.RiderID = ms.RiderID
+           AND (
+                (ba.RiderCoastID = ms.RiderCoastID)
+                OR (ba.RiderCoastID IS NULL AND ms.RiderCoastID IS NULL)
+           )
     """
 
     if ridercoastid is not None:
-        query += " AND RiderCoastID = :ridercoastid"
+        query += " WHERE ms.RiderCoastID = :ridercoastid"
 
-    query += " ORDER BY Wins DESC, AvgFinish ASC"
+    query += " ORDER BY ms.Wins DESC, ms.AvgFinish ASC"
 
     return fetch_all(query, locals())
 
