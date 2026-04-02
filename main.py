@@ -1,9 +1,12 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from typing import List, Optional
+from datetime import datetime, timezone
 import pyodbc
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy import create_engine
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 
 app = FastAPI()
@@ -33,10 +36,156 @@ engine = create_engine(
     creator=lambda: pyodbc.connect(CONN_STR)
 )
 
+FEATURED_RIDERS_CACHE = {
+    "date": None,
+    "data": []
+}
+
+RIDER_OF_THE_DAY_CACHE = {
+    "date": None,
+    "data": None
+}
+
 def fetch_all(query: str, params: dict):
     with engine.begin() as conn:
         result = conn.execute(text(query), params)
         return [dict(row._mapping) for row in result]
+
+def compute_featured_riders():
+    with engine.connect() as conn:
+        result = conn.execute(text("""
+            WITH RiderDirectory AS (
+                SELECT
+                    rl.RiderID,
+                    rl.FullName,
+                    rl.Country,
+                    rl.ImageURL,
+                    LOWER(LTRIM(RTRIM(rl.FullName))) AS NormalizedFullName,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY LOWER(LTRIM(RTRIM(rl.FullName)))
+                        ORDER BY rl.RiderID
+                    ) AS NameRank
+                FROM Rider_List rl
+                WHERE rl.FullName IS NOT NULL
+            ),
+            RecentGuessLeaders AS (
+                SELECT TOP 8
+                    rd.RiderID,
+                    rd.FullName,
+                    rd.Country,
+                    COALESCE(
+                        NULLIF(MAX(ug.ImageURL), ''),
+                        NULLIF(rd.ImageURL, ''),
+                        MAX(ug.ImageURL)
+                    ) AS ImageURL,
+                    COUNT(DISTINCT ug.UserID) AS UniqueUsers,
+                    COUNT(*) AS TotalGuesses
+                FROM dbo.UserGuesses ug
+                JOIN RiderDirectory rd
+                    ON rd.NormalizedFullName = LOWER(LTRIM(RTRIM(ug.FullName)))
+                   AND rd.NameRank = 1
+                WHERE ug.IsCorrect = 1
+                  AND ug.FullName IS NOT NULL
+                  AND ug.GuessedAt >= DATEADD(DAY, -7, GETUTCDATE())
+                GROUP BY
+                    rd.RiderID,
+                    rd.FullName,
+                    rd.Country,
+                    rd.ImageURL
+                ORDER BY
+                    COUNT(DISTINCT ug.UserID) DESC,
+                    COUNT(*) DESC,
+                    rd.FullName ASC
+            ),
+            RiderStarts AS (
+                SELECT RiderID, COUNT(*) AS Starts
+                FROM SX_MAINS
+                GROUP BY RiderID
+
+                UNION ALL
+
+                SELECT RiderID, COUNT(*) AS Starts
+                FROM MX_OVERALLS
+                GROUP BY RiderID
+            ),
+            CombinedStarts AS (
+                SELECT RiderID, SUM(Starts) AS TotalStarts
+                FROM RiderStarts
+                GROUP BY RiderID
+            ),
+            FallbackRiders AS (
+                SELECT TOP 8
+                    rd.RiderID,
+                    rd.FullName,
+                    rd.Country,
+                    rd.ImageURL,
+                    cs.TotalStarts
+                FROM CombinedStarts cs
+                JOIN RiderDirectory rd
+                    ON rd.RiderID = cs.RiderID
+                WHERE rd.ImageURL IS NOT NULL
+                  AND LTRIM(RTRIM(rd.ImageURL)) <> ''
+                  AND rd.RiderID NOT IN (
+                      SELECT RiderID
+                      FROM RecentGuessLeaders
+                  )
+                ORDER BY
+                    cs.TotalStarts DESC,
+                    rd.FullName ASC
+            )
+            SELECT TOP 8
+                featured.RiderID,
+                featured.FullName,
+                featured.Country,
+                featured.ImageURL
+            FROM (
+                SELECT
+                    rgl.RiderID,
+                    rgl.FullName,
+                    rgl.Country,
+                    rgl.ImageURL,
+                    0 AS SourceRank,
+                    rgl.UniqueUsers AS PrimaryScore,
+                    rgl.TotalGuesses AS SecondaryScore
+                FROM RecentGuessLeaders rgl
+
+                UNION ALL
+
+                SELECT
+                    fr.RiderID,
+                    fr.FullName,
+                    fr.Country,
+                    fr.ImageURL,
+                    1 AS SourceRank,
+                    fr.TotalStarts AS PrimaryScore,
+                    0 AS SecondaryScore
+                FROM FallbackRiders fr
+            ) featured
+            ORDER BY
+                featured.SourceRank ASC,
+                featured.PrimaryScore DESC,
+                featured.SecondaryScore DESC,
+                featured.FullName ASC
+        """)).fetchall()
+
+        return [dict(row._mapping) for row in result]
+
+def compute_rider_of_the_day():
+    with engine.connect() as conn:
+        row = conn.execute(text("""
+            SELECT TOP 1
+                RiderID,
+                FullName,
+                Country,
+                ImageURL
+            FROM Rider_List
+            WHERE FullName IS NOT NULL
+              AND ImageURL IS NOT NULL
+              AND LTRIM(RTRIM(ImageURL)) <> ''
+            ORDER BY NEWID()
+        """)).fetchone()
+
+        return dict(row._mapping) if row else None
 
 @app.get("/")
 def home():
@@ -92,17 +241,55 @@ def get_season_laps_led(
     ridercoastid: int = None
 ):
     query = """
-        SELECT *
-        FROM dbo.vw_SeasonLapStats
-        WHERE Year = :year
-          AND SportID = :sportid
-          AND ClassID = :classid
+        WITH LapStats AS (
+            SELECT *
+            FROM dbo.vw_SeasonLapStats
+            WHERE Year = :year
+              AND SportID = :sportid
+              AND ClassID = :classid
+        ),
+        BrandAgg AS (
+            SELECT
+                rt.Year,
+                1 AS SportID,
+                sm.ClassID,
+                sm.RiderID,
+                MAX(sm.Brand) AS Brand,
+                COALESCE(sm.RiderCoastID, cp.RiderCoastID) AS RiderCoastID
+            FROM SX_MAINS sm
+            JOIN Race_Table rt
+                ON rt.RaceID = sm.RaceID
+            LEFT JOIN CoastPool cp
+                ON cp.RiderID = sm.RiderID
+               AND cp.[Year] = rt.[Year]
+            WHERE rt.Year = :year
+              AND rt.SportID = :sportid
+              AND sm.ClassID = :classid
+            GROUP BY
+                rt.Year,
+                sm.ClassID,
+                sm.RiderID,
+                COALESCE(sm.RiderCoastID, cp.RiderCoastID)
+        )
+        SELECT
+            ls.*,
+            ba.Brand
+        FROM LapStats ls
+        LEFT JOIN BrandAgg ba
+            ON ba.Year = ls.Year
+           AND ba.SportID = ls.SportID
+           AND ba.ClassID = ls.ClassID
+           AND ba.RiderID = ls.RiderID
+           AND (
+                (ba.RiderCoastID = ls.RiderCoastID)
+                OR (ba.RiderCoastID IS NULL AND ls.RiderCoastID IS NULL)
+           )
     """
 
     if ridercoastid is not None:
-        query += " AND RiderCoastID = :ridercoastid"
+        query += " WHERE ls.RiderCoastID = :ridercoastid"
 
-    query += " ORDER BY LapsLed DESC"
+    query += " ORDER BY ls.LapsLed DESC"
 
     return fetch_all(query, locals())
 
@@ -313,19 +500,22 @@ def get_mx_overalls(raceid: int, classid: int):
 
         cursor.execute("""
             SELECT
-                Result,
-                FullName,
-                riderid,
-                Brand,
-                Moto1,
-                Moto2,
-                LapsLed,
-                Holeshot,
-                M1_Start,
-                M2_Start
-            FROM MX_OVERALLS
-            WHERE raceid = ?
-            AND classid = ?
+                mo.Result,
+                mo.FullName,
+                mo.riderid,
+                mo.Brand,
+                mo.Moto1,
+                mo.Moto2,
+                mo.LapsLed,
+                mo.Holeshot,
+                mo.M1_Start,
+                mo.M2_Start,
+                rl.ImageURL
+            FROM MX_OVERALLS mo
+            LEFT JOIN Rider_List rl
+                ON rl.RiderID = mo.RiderID
+            WHERE mo.raceid = ?
+            AND mo.classid = ?
             ORDER BY Result
         """, raceid, classid)
 
@@ -1548,21 +1738,24 @@ def get_supercross_main_event(
 
     query = """
         SELECT
-            ClassID,
-            Result              AS result,
-            riderid             AS riderid,
-            FullName            AS fullname,
-            Brand               AS brand,
-            Interval            AS interval,
-            BestLap             AS bestlap,
-            LapsLed             AS lapsled,
-            Holeshot            AS holeshot,
-            HoleshotPos         AS holeshotpos,
-            [Start]             AS Lap1Pos,
-            RiderCoastID        AS ridercoastid,
-            coastid             AS coastid
-        FROM SX_MAINS
-        WHERE RaceID = :raceid
+            sx.ClassID,
+            sx.Result              AS result,
+            sx.riderid             AS riderid,
+            sx.FullName            AS fullname,
+            sx.Brand               AS brand,
+            sx.Interval            AS interval,
+            sx.BestLap             AS bestlap,
+            sx.LapsLed             AS lapsled,
+            sx.Holeshot            AS holeshot,
+            sx.HoleshotPos         AS holeshotpos,
+            sx.[Start]             AS Lap1Pos,
+            sx.RiderCoastID        AS ridercoastid,
+            sx.coastid             AS coastid,
+            rl.ImageURL            AS imageurl
+        FROM SX_MAINS sx
+        LEFT JOIN Rider_List rl
+            ON rl.RiderID = sx.RiderID
+        WHERE sx.RaceID = :raceid
         ORDER BY ClassID, Result
     """
 
@@ -2265,7 +2458,69 @@ def get_countries():
         """))
 
         return [row.Country for row in result]
-    
+
+@app.get("/api/riders/index")
+def get_riders_index():
+    with engine.connect() as conn:
+        riders = conn.execute(text("""
+            SELECT RiderID, FullName, Last, First, Country, ImageURL
+            FROM Rider_List
+            WHERE FullName IS NOT NULL
+            ORDER BY Last, First, FullName
+        """)).fetchall()
+
+        count = conn.execute(text("""
+            SELECT COUNT(*) AS RiderCount
+            FROM Rider_List
+            WHERE FullName IS NOT NULL
+        """)).scalar()
+
+        return {
+            "riderCount": count,
+            "riders": [dict(row._mapping) for row in riders]
+        }
+
+@app.get("/api/riders/featured")
+def get_featured_riders():
+    today_utc = datetime.now(timezone.utc).date()
+
+    if FEATURED_RIDERS_CACHE["date"] != today_utc:
+        FEATURED_RIDERS_CACHE["data"] = compute_featured_riders()
+        FEATURED_RIDERS_CACHE["date"] = today_utc
+
+    return FEATURED_RIDERS_CACHE["data"]
+
+@app.get("/api/riders/rider-of-the-day")
+def get_rider_of_the_day():
+    today_utc = datetime.now(timezone.utc).date()
+
+    if RIDER_OF_THE_DAY_CACHE["date"] != today_utc:
+        RIDER_OF_THE_DAY_CACHE["data"] = compute_rider_of_the_day()
+        RIDER_OF_THE_DAY_CACHE["date"] = today_utc
+
+    return RIDER_OF_THE_DAY_CACHE["data"]
+
+@app.get("/api/image-proxy")
+def image_proxy(url: str):
+    parsed = urlparse(url)
+
+    if parsed.scheme not in {"http", "https"}:
+        raise HTTPException(status_code=400, detail="Invalid image URL")
+
+    try:
+        request = Request(
+            url,
+            headers={"User-Agent": "SMXmuse/1.0"}
+        )
+
+        with urlopen(request, timeout=10) as remote:
+            content_type = remote.headers.get_content_type() or "image/jpeg"
+            body = remote.read()
+
+        return Response(content=body, media_type=content_type)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch image: {exc}")
+
 @app.get("/countries/{country}")
 def get_country(country: str):
     with engine.connect() as conn:
@@ -2297,6 +2552,7 @@ def get_mx_season_overall(year: int, classid: int):
     SELECT
         mo.RiderID,
         mo.FullName,
+        mo.Brand,
         mo.Result,
         mo.Holeshot,
         mo.M1_Start,
@@ -2331,6 +2587,7 @@ StartsCalc AS (
 SELECT
     RiderID,
     FullName,
+    MAX(Brand) AS Brand,
 
     COUNT(*) AS Starts,
 
@@ -2487,6 +2744,7 @@ def get_mx_season_laps_led(
             mo.ClassID,
             mo.RiderID,
             mo.FullName,
+            MAX(mo.Brand) AS Brand,
             SUM(COALESCE(mo.LapsLed, 0)) AS LapsLed
         FROM MX_OVERALLS mo
         JOIN Race_Table rt
@@ -2510,6 +2768,7 @@ def get_mx_season_laps_led(
         r.ClassID,
         r.RiderID,
         r.FullName,
+        r.Brand,
         r.LapsLed,
         CASE 
             WHEN t.Total = 0 THEN 0
@@ -2708,7 +2967,49 @@ def get_races(sport_id: int, year: int):
     }
     for row in rows
 ]
-    
+
+@app.get("/api/season-champions")
+def get_season_champions(sport_id: int, year: int):
+    with pyodbc.connect(CONN_STR) as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                c.RiderID,
+                c.ClassID,
+                c.CoastID,
+                rl.FullName,
+                rl.ImageURL,
+                rl.Country
+            FROM Champions c
+            LEFT JOIN Rider_List rl
+                ON rl.RiderID = c.RiderID
+            WHERE c.SportID = ?
+              AND c.Year = ?
+            ORDER BY
+                CASE
+                    WHEN c.ClassID = 1 THEN 1
+                    WHEN c.ClassID = 2 AND c.CoastID = 1 THEN 2
+                    WHEN c.ClassID = 2 AND c.CoastID = 2 THEN 3
+                    WHEN c.ClassID = 3 THEN 4
+                    ELSE 5
+                END
+        """, sport_id, year)
+
+        rows = cursor.fetchall()
+
+        return [
+            {
+                "riderid": row.RiderID,
+                "classid": row.ClassID,
+                "coastid": row.CoastID,
+                "fullname": row.FullName,
+                "imageurl": row.ImageURL,
+                "country": row.Country
+            }
+            for row in rows
+        ]
+     
 @app.get("/api/race/mx-classes")
 def get_mx_classes(raceid: int):
     query = """
