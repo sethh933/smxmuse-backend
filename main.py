@@ -2486,11 +2486,20 @@ def get_track_profile(track_id: int, sport_id: int, class_id: int):
 def get_countries():
     with engine.connect() as conn:
         result = conn.execute(text("""
+            WITH NormalizedCountries AS (
+                SELECT
+                    CASE
+                        WHEN Country IN ('United Kingdom', 'England', 'Wales', 'Scotland')
+                            THEN 'United Kingdom'
+                        ELSE Country
+                    END AS Country
+                FROM Rider_List
+                WHERE Country IS NOT NULL
+            )
             SELECT Country
-            FROM Rider_List
-            WHERE Country IS NOT NULL
+            FROM NormalizedCountries
             GROUP BY Country
-            ORDER BY 
+            ORDER BY
                 CASE WHEN Country = 'United States' THEN 0 ELSE 1 END,
                 Country
         """))
@@ -2562,22 +2571,49 @@ def image_proxy(url: str):
 @app.get("/countries/{country}")
 def get_country(country: str):
     with engine.connect() as conn:
+        country_group = ['United Kingdom', 'England', 'Wales', 'Scotland']
+        normalized_country = "United Kingdom" if country in country_group else country
 
-        riders = conn.execute(text("""
-    SELECT RiderID, FullName, Last, First, ImageURL
-    FROM Rider_List
-    WHERE LTRIM(RTRIM(LOWER(Country))) = LTRIM(RTRIM(LOWER(:country)))
-    ORDER BY Last, First
-"""), {"country": country}).fetchall()
+        if normalized_country == "United Kingdom":
+            riders_query = text("""
+                SELECT RiderID, FullName, Last, First, ImageURL
+                FROM Rider_List
+                WHERE LTRIM(RTRIM(LOWER(Country))) IN (
+                    'united kingdom',
+                    'england',
+                    'wales',
+                    'scotland'
+                )
+                ORDER BY Last, First
+            """)
+            count_query = text("""
+                SELECT COUNT(*) AS RiderCount
+                FROM Rider_List
+                WHERE LTRIM(RTRIM(LOWER(Country))) IN (
+                    'united kingdom',
+                    'england',
+                    'wales',
+                    'scotland'
+                )
+            """)
+            riders = conn.execute(riders_query).fetchall()
+            count = conn.execute(count_query).scalar()
+        else:
+            riders = conn.execute(text("""
+                SELECT RiderID, FullName, Last, First, ImageURL
+                FROM Rider_List
+                WHERE LTRIM(RTRIM(LOWER(Country))) = LTRIM(RTRIM(LOWER(:country)))
+                ORDER BY Last, First
+            """), {"country": country}).fetchall()
 
-        count = conn.execute(text("""
-            SELECT COUNT(*) AS RiderCount
-            FROM Rider_List
-            WHERE LTRIM(RTRIM(LOWER(Country))) = LTRIM(RTRIM(LOWER(:country)))
-        """), {"country": country}).scalar()
+            count = conn.execute(text("""
+                SELECT COUNT(*) AS RiderCount
+                FROM Rider_List
+                WHERE LTRIM(RTRIM(LOWER(Country))) = LTRIM(RTRIM(LOWER(:country)))
+            """), {"country": country}).scalar()
 
         return {
-            "country": country,
+            "country": normalized_country,
             "riderCount": count,
             "riders": [dict(row._mapping) for row in riders]
         }
