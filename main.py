@@ -199,12 +199,37 @@ def get_season_main_stats(
     ridercoastid: int = None
 ):
     query = """
-        WITH MainStats AS (
-            SELECT *
+        WITH CoastPoolResolved AS (
+            SELECT
+                RiderID,
+                [Year],
+                MIN(RiderCoastID) AS RiderCoastID
+            FROM CoastPool
+            GROUP BY RiderID, [Year]
+        ),
+        MainStatsRaw AS (
+            SELECT DISTINCT *
             FROM dbo.vw_SeasonMainEventStats
             WHERE Year = :year
               AND SportID = :sportid
               AND ClassID = :classid
+        ),
+        MainStats AS (
+            SELECT *
+            FROM (
+                SELECT
+                    msr.*,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY msr.RiderID
+                        ORDER BY
+                            CASE WHEN msr.RiderCoastID IS NULL THEN 0 ELSE 1 END,
+                            msr.Wins DESC,
+                            msr.AvgFinish ASC,
+                            msr.Points DESC
+                    ) AS rn
+                FROM MainStatsRaw msr
+            ) ranked
+            WHERE rn = 1
         ),
         BrandAgg AS (
             SELECT
@@ -217,12 +242,13 @@ def get_season_main_stats(
             FROM SX_MAINS sm
             JOIN Race_Table rt
                 ON rt.RaceID = sm.RaceID
-            LEFT JOIN CoastPool cp
+            LEFT JOIN CoastPoolResolved cp
                 ON cp.RiderID = sm.RiderID
                AND cp.[Year] = rt.[Year]
             WHERE rt.Year = :year
               AND rt.SportID = :sportid
               AND sm.ClassID = :classid
+              AND (:ridercoastid IS NULL OR COALESCE(sm.RiderCoastID, cp.RiderCoastID) = :ridercoastid)
             GROUP BY
                 rt.Year,
                 sm.ClassID,
@@ -231,8 +257,11 @@ def get_season_main_stats(
         )
         SELECT
             ms.*,
+            COALESCE(rl.FullName, ms.FullName) AS DisplayFullName,
             ba.Brand
         FROM MainStats ms
+        LEFT JOIN Rider_List rl
+            ON rl.RiderID = ms.RiderID
         LEFT JOIN BrandAgg ba
             ON ba.Year = ms.Year
            AND ba.SportID = ms.SportID
@@ -258,6 +287,115 @@ def get_season_start_stats(
     classid: int,
     ridercoastid: int = None
 ):
+    if sportid == 1:
+        query = """
+            WITH CoastPoolResolved AS (
+                SELECT
+                    RiderID,
+                    [Year],
+                    MIN(RiderCoastID) AS RiderCoastID
+                FROM CoastPool
+                GROUP BY RiderID, [Year]
+            ),
+            Base AS (
+                SELECT
+                    rt.Year,
+                    1 AS SportID,
+                    q.ClassID,
+                    q.RiderID,
+                    COALESCE(rl.FullName, q.FullName) AS FullName,
+                    COALESCE(q.RiderCoastID, cp.RiderCoastID) AS RiderCoastID,
+                    'QUAL' AS SessionType,
+                    q.Result
+                FROM SX_QUAL q
+                JOIN Race_Table rt
+                    ON rt.RaceID = q.RaceID
+                LEFT JOIN Rider_List rl
+                    ON rl.RiderID = q.RiderID
+                LEFT JOIN CoastPoolResolved cp
+                    ON cp.RiderID = q.RiderID
+                   AND cp.[Year] = rt.[Year]
+                WHERE rt.Year = :year
+                  AND rt.SportID = :sportid
+                  AND q.ClassID = :classid
+                  AND (:ridercoastid IS NULL OR COALESCE(q.RiderCoastID, cp.RiderCoastID) = :ridercoastid)
+
+                UNION ALL
+
+                SELECT
+                    rt.Year,
+                    1 AS SportID,
+                    h.ClassID,
+                    h.RiderID,
+                    COALESCE(rl.FullName, h.FullName) AS FullName,
+                    COALESCE(h.RiderCoastID, cp.RiderCoastID) AS RiderCoastID,
+                    'HEAT' AS SessionType,
+                    h.Result
+                FROM SX_HEATS h
+                JOIN Race_Table rt
+                    ON rt.RaceID = h.RaceID
+                LEFT JOIN Rider_List rl
+                    ON rl.RiderID = h.RiderID
+                LEFT JOIN CoastPoolResolved cp
+                    ON cp.RiderID = h.RiderID
+                   AND cp.[Year] = rt.[Year]
+                WHERE rt.Year = :year
+                  AND rt.SportID = :sportid
+                  AND h.ClassID = :classid
+                  AND (:ridercoastid IS NULL OR COALESCE(h.RiderCoastID, cp.RiderCoastID) = :ridercoastid)
+
+                UNION ALL
+
+                SELECT
+                    rt.Year,
+                    1 AS SportID,
+                    l.ClassID,
+                    l.RiderID,
+                    COALESCE(rl.FullName, l.FullName) AS FullName,
+                    COALESCE(l.RiderCoastID, cp.RiderCoastID) AS RiderCoastID,
+                    'LCQ' AS SessionType,
+                    l.Result
+                FROM SX_LCQS l
+                JOIN Race_Table rt
+                    ON rt.RaceID = l.RaceID
+                LEFT JOIN Rider_List rl
+                    ON rl.RiderID = l.RiderID
+                LEFT JOIN CoastPoolResolved cp
+                    ON cp.RiderID = l.RiderID
+                   AND cp.[Year] = rt.[Year]
+                WHERE rt.Year = :year
+                  AND rt.SportID = :sportid
+                  AND l.ClassID = :classid
+                  AND (:ridercoastid IS NULL OR COALESCE(l.RiderCoastID, cp.RiderCoastID) = :ridercoastid)
+            )
+            SELECT
+                Year,
+                SportID,
+                ClassID,
+                RiderID,
+                MAX(FullName) AS FullName,
+                MAX(FullName) AS DisplayFullName,
+                MAX(RiderCoastID) AS RiderCoastID,
+                SUM(CASE WHEN SessionType = 'QUAL' THEN 1 ELSE 0 END) AS QualStarts,
+                SUM(CASE WHEN SessionType = 'QUAL' AND Result = 1 THEN 1 ELSE 0 END) AS Poles,
+                MIN(CASE WHEN SessionType = 'QUAL' THEN Result END) AS BestQual,
+                CAST(ROUND(AVG(CASE WHEN SessionType = 'QUAL' THEN CAST(Result AS DECIMAL(10,2)) END), 2) AS DECIMAL(10,2)) AS AvgQualFinish,
+                SUM(CASE WHEN SessionType = 'HEAT' THEN 1 ELSE 0 END) AS HeatStarts,
+                SUM(CASE WHEN SessionType = 'HEAT' AND Result = 1 THEN 1 ELSE 0 END) AS HeatWins,
+                MIN(CASE WHEN SessionType = 'HEAT' THEN Result END) AS BestHeat,
+                SUM(CASE WHEN SessionType = 'LCQ' THEN 1 ELSE 0 END) AS LCQStarts,
+                SUM(CASE WHEN SessionType = 'LCQ' AND Result = 1 THEN 1 ELSE 0 END) AS LCQWins,
+                MIN(CASE WHEN SessionType = 'LCQ' THEN Result END) AS BestLCQ
+            FROM Base
+            GROUP BY
+                Year,
+                SportID,
+                ClassID,
+                RiderID
+        """
+
+        return fetch_all(query, locals())
+
     query = """
         SELECT *
         FROM dbo.vw_SeasonStartStats
@@ -539,7 +677,7 @@ def get_mx_overalls(raceid: int, classid: int):
         cursor.execute("""
             SELECT
                 mo.Result,
-                mo.FullName,
+                COALESCE(rl.FullName, mo.FullName) AS FullName,
                 mo.riderid,
                 mo.Brand,
                 mo.Moto1,
@@ -574,14 +712,16 @@ def get_mx_consi(raceid: int, classid: int):
 
         cursor.execute("""
             SELECT
-                Result,
-                riderid,
-                FullName,
-                Brand
-            FROM MX_CONSIS
-            WHERE raceid = ?
-            AND classid = ?
-            ORDER BY Result
+                mc.Result AS Result,
+                mc.riderid AS riderid,
+                COALESCE(rl.FullName, mc.FullName) AS FullName,
+                mc.Brand AS Brand
+            FROM MX_CONSIS mc
+            LEFT JOIN Rider_List rl
+                ON rl.RiderID = mc.RiderID
+            WHERE mc.raceid = ?
+            AND mc.classid = ?
+            ORDER BY mc.Result
         """, raceid, classid)
 
         columns = [column[0].lower() for column in cursor.description]
@@ -604,15 +744,17 @@ def get_supercross_lcqs(
 
     query = """
         SELECT
-            Result          AS result,
-            riderid         AS riderid,
-            FullName        AS fullname,
-            Brand           AS brand,
-            RiderCoastID    AS ridercoastid
-        FROM SX_LCQS
-        WHERE RaceID = :raceid
-          AND ClassID = :classid
-        ORDER BY Result
+            sxl.Result      AS result,
+            sxl.riderid     AS riderid,
+            COALESCE(rl.FullName, sxl.FullName) AS fullname,
+            sxl.Brand       AS brand,
+            sxl.RiderCoastID AS ridercoastid
+        FROM SX_LCQS sxl
+        LEFT JOIN Rider_List rl
+            ON rl.RiderID = sxl.RiderID
+        WHERE sxl.RaceID = :raceid
+          AND sxl.ClassID = :classid
+        ORDER BY sxl.Result
     """
 
     rows = fetch_all(query, {"raceid": raceid, "classid": classid})
@@ -628,17 +770,19 @@ def get_qualifying(raceid: int, classid: int, sport_id: int):
         if sport_id == 1:
             query = """
                 SELECT
-                    Result          AS result,
-                    riderid         AS riderid,
-                    FullName        AS fullname,
-                    Brand           AS brand,
-                    Best_Lap        AS best_lap,
-                    RiderCoastID    AS ridercoastid,
-                    coastid         AS coastid
-                FROM SX_QUAL
-                WHERE RaceID = :raceid
-                  AND ClassID = :classid
-                ORDER BY Result
+                    sxq.Result      AS result,
+                    sxq.riderid     AS riderid,
+                    COALESCE(rl.FullName, sxq.FullName) AS fullname,
+                    sxq.Brand       AS brand,
+                    sxq.Best_Lap    AS best_lap,
+                    sxq.RiderCoastID AS ridercoastid,
+                    sxq.coastid     AS coastid
+                FROM SX_QUAL sxq
+                LEFT JOIN Rider_List rl
+                    ON rl.RiderID = sxq.RiderID
+                WHERE sxq.RaceID = :raceid
+                  AND sxq.ClassID = :classid
+                ORDER BY sxq.Result
             """
 
             return fetch_all(query, {
@@ -653,15 +797,17 @@ def get_qualifying(raceid: int, classid: int, sport_id: int):
 
                 cursor.execute("""
                     SELECT
-                        Result,
-                        riderid,
-                        FullName,
-                        Brand,
-                        Best_Lap
-                    FROM MX_QUAL
-                    WHERE raceid = ?
-                      AND classid = ?
-                    ORDER BY Result
+                        mq.Result AS Result,
+                        mq.riderid AS riderid,
+                        COALESCE(rl.FullName, mq.FullName) AS FullName,
+                        mq.Brand AS Brand,
+                        mq.Best_Lap AS Best_Lap
+                    FROM MX_QUAL mq
+                    LEFT JOIN Rider_List rl
+                        ON rl.RiderID = mq.RiderID
+                    WHERE mq.raceid = ?
+                      AND mq.classid = ?
+                    ORDER BY mq.Result
                 """, raceid, classid)
 
                 columns = [column[0].lower() for column in cursor.description]
@@ -1779,7 +1925,7 @@ def get_supercross_main_event(
             sx.ClassID,
             sx.Result              AS result,
             sx.riderid             AS riderid,
-            sx.FullName            AS fullname,
+            COALESCE(rl.FullName, sx.FullName) AS fullname,
             sx.Brand               AS brand,
             sx.Interval            AS interval,
             sx.BestLap             AS bestlap,
@@ -1787,6 +1933,9 @@ def get_supercross_main_event(
             sx.Holeshot            AS holeshot,
             sx.HoleshotPos         AS holeshotpos,
             sx.[Start]             AS Lap1Pos,
+            sx.TC1                 AS tc1,
+            sx.TC2                 AS tc2,
+            sx.TC3                 AS tc3,
             sx.RiderCoastID        AS ridercoastid,
             sx.coastid             AS coastid,
             rl.ImageURL            AS imageurl
@@ -1813,6 +1962,58 @@ def get_supercross_main_event(
         "class250": class250
     }
 
+@app.get("/api/race/triple-crown-mains")
+def get_supercross_triple_crown_mains(raceid: int):
+    """
+    Returns individual Triple Crown mains for a single Supercross race,
+    split by class (450 / 250) and main number (1 / 2 / 3).
+    """
+
+    query = """
+        SELECT
+            tc.classid             AS classid,
+            tc.main                AS main,
+            tc.Result              AS result,
+            tc.riderid             AS riderid,
+            COALESCE(rl.FullName, tc.FullName) AS fullname,
+            tc.Brand               AS brand,
+            tc.Interval            AS interval,
+            tc.BestLap             AS bestlap,
+            tc.LapsLed             AS lapsled,
+            tc.Holeshot            AS holeshot,
+            tc.HoleshotPos         AS holeshotpos,
+            tc.[Start]             AS Lap1Pos,
+            tc.RiderCoastID        AS ridercoastid,
+            tc.coastid             AS coastid,
+            rl.ImageURL            AS imageurl
+        FROM TC_MAINS tc
+        LEFT JOIN Rider_List rl
+            ON rl.RiderID = tc.RiderID
+        WHERE tc.raceid = :raceid
+        ORDER BY tc.classid, tc.main, tc.Result
+    """
+
+    rows = fetch_all(query, {"raceid": raceid})
+
+    response = {
+        "class450_main1": [],
+        "class450_main2": [],
+        "class450_main3": [],
+        "class250_main1": [],
+        "class250_main2": [],
+        "class250_main3": [],
+    }
+
+    for row in rows:
+        classid = row.get("classid")
+        main = row.get("main")
+        if classid == 1 and main in (1, 2, 3):
+            response[f"class450_main{main}"].append(row)
+        elif classid == 2 and main in (1, 2, 3):
+            response[f"class250_main{main}"].append(row)
+
+    return response
+
 @app.get("/api/race/heats")
 def get_supercross_heats(
     raceid: int,
@@ -1824,17 +2025,19 @@ def get_supercross_heats(
 
     query = """
         SELECT
-            Heat,
-            Result          AS result,
-            riderid         AS riderid,
-            FullName        AS fullname,
-            Brand           AS brand,
-            RiderCoastID    AS ridercoastid,
-            coastid         AS coastid
-        FROM SX_HEATS
-        WHERE RaceID = :raceid
-          AND ClassID = :classid
-        ORDER BY Heat, Result
+            sxh.Heat        AS Heat,
+            sxh.Result      AS result,
+            sxh.riderid     AS riderid,
+            COALESCE(rl.FullName, sxh.FullName) AS fullname,
+            sxh.Brand       AS brand,
+            sxh.RiderCoastID AS ridercoastid,
+            sxh.coastid     AS coastid
+        FROM SX_HEATS sxh
+        LEFT JOIN Rider_List rl
+            ON rl.RiderID = sxh.RiderID
+        WHERE sxh.RaceID = :raceid
+          AND sxh.ClassID = :classid
+        ORDER BY sxh.Heat, sxh.Result
     """
 
     rows = fetch_all(query, {"raceid": raceid, "classid": classid})
@@ -2956,6 +3159,8 @@ def get_race_header(raceid: int):
         rt.Year,
         rt.TrackName,
         rt.SportID,
+        rt.CoastID,
+        rt.TripleCrownID,
         maxRounds.MaxRound
     FROM Race_Table rt
     CROSS APPLY (
