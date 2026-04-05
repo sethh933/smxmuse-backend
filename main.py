@@ -3,8 +3,7 @@ from typing import List, Optional
 from datetime import datetime, timezone
 import pyodbc
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -33,7 +32,8 @@ CONN_STR = (
 
 engine = create_engine(
     "mssql+pyodbc://",
-    creator=lambda: pyodbc.connect(CONN_STR)
+    creator=lambda: pyodbc.connect(CONN_STR),
+    pool_pre_ping=True,
 )
 
 FEATURED_RIDERS_CACHE = {
@@ -2512,11 +2512,6 @@ def search_riders(q: str = Query(..., min_length=2)):
         for row in rows
 ]
 
-from fastapi import APIRouter, HTTPException
-from sqlalchemy import create_engine
-
-router = APIRouter()
-
 @app.get("/api/track-profile")
 def get_track_profile(track_id: int, sport_id: int, class_id: int):
 
@@ -3113,39 +3108,43 @@ def search(q: str):
     like = f"%{q}%"
     starts = f"{q}%"
 
-    riders = engine.execute("""
+    riders_query = """
         SELECT TOP 8 RiderID, FullName, Country
         FROM Rider_List
         WHERE FullName LIKE ?
         ORDER BY
             CASE WHEN FullName LIKE ? THEN 0 ELSE 1 END,
             FullName
-    """, (like, starts)).fetchall()
+    """
 
-    tracks = engine.execute("""
+    tracks_query = """
     SELECT TOP 8
         rt.TrackID,
         rt.TrackName,
         tt.State,
         rt.SportID
     FROM Race_Table rt
-    JOIN TrackTable tt 
+    JOIN TrackTable tt
         ON rt.TrackID = tt.TrackID
     WHERE rt.TrackName LIKE ?
       AND rt.SportID IN (1, 2)   -- 🔥 ADD THIS LINE
-    GROUP BY 
-        rt.TrackID, 
-        rt.TrackName, 
-        tt.State, 
+    GROUP BY
+        rt.TrackID,
+        rt.TrackName,
+        tt.State,
         rt.SportID
     ORDER BY
         CASE WHEN rt.TrackName LIKE ? THEN 0 ELSE 1 END,
         rt.TrackName
-""", (like, starts)).fetchall()
+    """
+
+    with engine.connect() as conn:
+        riders = conn.exec_driver_sql(riders_query, (like, starts)).mappings().all()
+        tracks = conn.exec_driver_sql(tracks_query, (like, starts)).mappings().all()
 
     return {
-        "riders": [dict(r._mapping) for r in riders],
-        "tracks": [dict(t._mapping) for t in tracks],
+        "riders": [dict(r) for r in riders],
+        "tracks": [dict(t) for t in tracks],
     }
 
 @app.get("/api/race-header")
