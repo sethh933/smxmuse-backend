@@ -1,12 +1,18 @@
 from fastapi import FastAPI, HTTPException, Query, Response
 from typing import List, Optional
 from datetime import datetime, timezone
+from pathlib import Path
+import os
 import pyodbc
+from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, text
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env.local")
 
 app = FastAPI()
 
@@ -20,14 +26,40 @@ app.add_middleware(
 )
 
 # ✅ Azure SQL Connection
+SQL_DRIVER = os.getenv("SQL_DRIVER", "ODBC Driver 18 for SQL Server")
+SQL_SERVER = os.getenv("SQL_SERVER")
+SQL_DATABASE = os.getenv("SQL_DATABASE")
+SQL_USERNAME = os.getenv("SQL_USERNAME")
+SQL_PASSWORD = os.getenv("SQL_PASSWORD")
+SQL_ENCRYPT = os.getenv("SQL_ENCRYPT", "yes")
+SQL_TRUST_SERVER_CERT = os.getenv("SQL_TRUST_SERVER_CERT", "no")
+SQL_MARS = os.getenv("SQL_MARS_CONNECTION", "yes")
+
+missing_db_settings = [
+    key for key, value in {
+        "SQL_SERVER": SQL_SERVER,
+        "SQL_DATABASE": SQL_DATABASE,
+        "SQL_USERNAME": SQL_USERNAME,
+        "SQL_PASSWORD": SQL_PASSWORD,
+    }.items()
+    if not value
+]
+
+if missing_db_settings:
+    raise RuntimeError(
+        "Missing required database settings in .env.local: "
+        + ", ".join(missing_db_settings)
+    )
+
 CONN_STR = (
-    "DRIVER={ODBC Driver 18 for SQL Server};"
-    "SERVER=tcp:smxmuse.database.windows.net;"
-    "DATABASE=smxmuse;"
-    "UID=smxmuseadmin;"
-    "PWD=Anaheim12025!;"
-    "Encrypt=yes;TrustServerCertificate=no;"
-    "MARS_Connection=yes;"
+    f"DRIVER={{{SQL_DRIVER}}};"
+    f"SERVER={SQL_SERVER};"
+    f"DATABASE={SQL_DATABASE};"
+    f"UID={SQL_USERNAME};"
+    f"PWD={SQL_PASSWORD};"
+    f"Encrypt={SQL_ENCRYPT};"
+    f"TrustServerCertificate={SQL_TRUST_SERVER_CERT};"
+    f"MARS_Connection={SQL_MARS};"
 )
 
 engine = create_engine(
