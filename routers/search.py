@@ -4,6 +4,7 @@ from urllib.request import Request, urlopen
 from fastapi import APIRouter, HTTPException, Response
 
 from db import engine
+from error_utils import raise_http_error
 
 
 router = APIRouter()
@@ -73,4 +74,4 @@ def image_proxy(url: str):
 
         return Response(content=body, media_type=content_type)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch image: {exc}")
+        raise_http_error("Failed to fetch remote image.", exc, status_code=502)

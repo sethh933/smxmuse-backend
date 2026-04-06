@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import text
 
 from db import CONN_STR, engine, fetch_all
+from error_utils import raise_http_error
 
 
 router = APIRouter()
@@ -173,7 +174,7 @@ def get_track_profile(track_id: int, sport_id: int, class_id: int):
             }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_http_error("Failed to load track profile.", e)
 
 
 @router.get("/api/track-classes")

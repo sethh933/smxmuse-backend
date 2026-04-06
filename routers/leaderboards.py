@@ -1,9 +1,10 @@
 from typing import List
 
 import pyodbc
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Query
 
 from db import CONN_STR
+from error_utils import raise_http_error
 
 
 router = APIRouter()
@@ -64,7 +65,7 @@ ORDER BY wins DESC;
         return {"supercross": supercross, "motocross": motocross}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching wins leaderboard: {str(e)}")
+        raise_http_error("Failed to load wins leaderboard.", e)
 
 
 @router.get("/leaderboard2")
@@ -122,7 +123,7 @@ ORDER BY podiums DESC;
         return {"supercross": supercross, "motocross": motocross}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching podiums leaderboard: {str(e)}")
+        raise_http_error("Failed to load podiums leaderboard.", e)
 
 
 @router.get("/leaderboard3")
@@ -178,7 +179,7 @@ ORDER BY starts DESC;
         return {"supercross": supercross, "motocross": motocross}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching starts leaderboard: {str(e)}")
+        raise_http_error("Failed to load starts leaderboard.", e)
 
 
 @router.get("/leaderboard4")
@@ -242,4 +243,4 @@ ORDER BY moto_wins DESC;
         return {"supercross": supercross, "motocross": motocross}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching heat/moto wins leaderboard: {str(e)}")
+        raise_http_error("Failed to load heat and moto wins leaderboard.", e)

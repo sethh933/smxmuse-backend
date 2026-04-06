@@ -13,6 +13,7 @@ from db import (
     engine,
     fetch_all,
 )
+from error_utils import raise_http_error
 
 
 router = APIRouter()
@@ -785,7 +786,7 @@ def get_rider_profile(rider_id: int, sport: str = "SX"):
                 **payload,
             }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_http_error("Failed to load rider profile.", e)
 
 
 @router.get("/api/riders/search")
@@ -1093,7 +1094,7 @@ ORDER BY
             return results
 
     except Exception as e:
-        return {"error": str(e)}
+        raise_http_error("Failed to load rider points standings.", e)
 
 
 @router.get("/rider/{rider_id}/race-results")
@@ -1249,4 +1250,4 @@ ORDER BY RaceDate DESC
             return {"rider": rider_data, "results": results}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_http_error("Failed to load rider race results.", e)

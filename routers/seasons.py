@@ -2,6 +2,7 @@ import pyodbc
 from fastapi import APIRouter
 
 from db import CONN_STR, fetch_all
+from error_utils import raise_http_error
 
 
 router = APIRouter()
@@ -609,7 +610,7 @@ def get_years(sport_id: int):
             return [row.Year for row in rows]
 
     except Exception as e:
-        return {"error": str(e)}
+        raise_http_error("Failed to load available years.", e)
 
 
 @router.get("/api/races")
@@ -719,7 +720,7 @@ def get_current_season():
             }
 
     except Exception as e:
-        return {"error": str(e)}
+        raise_http_error("Failed to load current season.", e)
 
 
 @router.get("/api/available-classes")

@@ -2,6 +2,7 @@ import pyodbc
 from fastapi import APIRouter
 
 from db import CONN_STR, fetch_all
+from error_utils import raise_http_error
 
 
 router = APIRouter()
@@ -144,7 +145,7 @@ def get_qualifying(raceid: int, classid: int, sport_id: int):
             ]
 
     except Exception as e:
-        return {"error": str(e)}
+        raise_http_error("Failed to load race qualifying results.", e)
 
 
 @router.get("/api/race/main-event")
