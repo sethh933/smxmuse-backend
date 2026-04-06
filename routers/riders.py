@@ -222,7 +222,7 @@ def _get_mx_profile_payload_from_summary(cursor, rider_id: int):
                             WHEN ClassID = 2 THEN 1
                             WHEN ClassID = 1 THEN 2
                             WHEN ClassID = 3 THEN 3
-                            WHEN ClassID = 0 THEN 3
+                            WHEN ClassID = 0 THEN 4
                             ELSE 9
                         END
                     ELSE ClassID
@@ -763,7 +763,7 @@ overall_career_class AS (
     GROUP BY o.ClassID, CASE WHEN o.ClassID = 1 THEN '450' WHEN o.ClassID = 2 THEN '250' WHEN o.ClassID = 3 THEN '500' END
 ),
 career_class_rows AS (
-    SELECT NULL AS [Year], o.ClassID, CASE WHEN ClassID = 1 THEN '450' WHEN ClassID = 2 THEN '250' END AS Class, NULL AS Brand,
+    SELECT NULL AS [Year], o.ClassID, CASE WHEN ClassID = 1 THEN '450' WHEN ClassID = 2 THEN '250' WHEN ClassID = 3 THEN '500' END AS Class, NULL AS Brand,
         o.Starts, o.BestOverall, o.BestMoto, o.AvgOverallFinish, o.AvgMotoFinish, o.AvgMoto1Finish, o.AvgMoto2Finish,
         o.Top10s, o.Top10Pct, o.Top5s, o.Top5Pct, o.Podiums, o.PodiumPct, o.Wins, o.WinPct, o.LapsLed, o.Holeshots, o.AvgStart, o.TotalPoints
     FROM overall_career_class o
@@ -831,7 +831,7 @@ ORDER BY
                 WHEN ClassID = 2 THEN 1
                 WHEN ClassID = 1 THEN 2
                 WHEN ClassID = 3 THEN 3
-                WHEN ClassID = 0 THEN 3
+                WHEN ClassID = 0 THEN 4
                 ELSE 9
             END
         ELSE ClassID

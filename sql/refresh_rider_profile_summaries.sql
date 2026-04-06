@@ -694,7 +694,7 @@ SELECT
 FROM overall_year_brand
 UNION ALL
 SELECT
-    RiderID, NULL AS [Year], ClassID, CASE WHEN ClassID = 1 THEN '450' WHEN ClassID = 2 THEN '250' END AS Class, NULL AS Brand,
+    RiderID, NULL AS [Year], ClassID, CASE WHEN ClassID = 1 THEN '450' WHEN ClassID = 2 THEN '250' WHEN ClassID = 3 THEN '500' END AS Class, NULL AS Brand,
     Starts, BestOverall, BestMoto, AvgOverallFinish, AvgMotoFinish, AvgMoto1Finish, AvgMoto2Finish,
     Top10s, Top10Pct, Top5s, Top5Pct, Podiums, PodiumPct, Wins, WinPct, LapsLed, Holeshots, AvgStart, TotalPoints
 FROM overall_career_class
