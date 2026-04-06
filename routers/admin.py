@@ -1,4 +1,5 @@
 from secrets import compare_digest
+from typing import Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -11,7 +12,7 @@ from scripts.refresh_rider_profile_summaries import refresh_rider_profile_summar
 router = APIRouter()
 
 
-def _require_admin_token(x_admin_token: str | None):
+def _require_admin_token(x_admin_token: Optional[str]):
     if not ADMIN_REFRESH_TOKEN:
         raise HTTPException(
             status_code=500,
@@ -38,7 +39,7 @@ def _post_grid_cache_refresh():
 
 
 @router.post("/admin/refresh-caches")
-def refresh_caches(x_admin_token: str | None = Header(default=None)):
+def refresh_caches(x_admin_token: Optional[str] = Header(default=None)):
     _require_admin_token(x_admin_token)
 
     try:
