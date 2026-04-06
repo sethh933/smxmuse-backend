@@ -38,6 +38,7 @@ def get_track_profile(track_id: int, sport_id: int, class_id: int):
             rt.TrackName,
             rt.RaceID,
             rt.RaceDate,
+            fm.RiderID,
             fm.FullName AS Winner,
             fm.Brand
         FROM #FilteredMains fm
@@ -101,6 +102,7 @@ def get_track_profile(track_id: int, sport_id: int, class_id: int):
             rt.TrackName,
             rt.RaceID,
             rt.RaceDate,
+            fm.RiderID,
             fm.FullName AS Winner,
             fm.Brand
         FROM #FilteredMains fm
