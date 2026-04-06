@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from db import FRONTEND_ORIGINS
+from routers.admin import router as admin_router
 from routers.comparisons import router as comparisons_router
 from routers.leaderboards import router as leaderboards_router
 from routers.races import router as races_router
@@ -34,3 +35,4 @@ app.include_router(races_router)
 app.include_router(seasons_router)
 app.include_router(comparisons_router)
 app.include_router(riders_router)
+app.include_router(admin_router)

@@ -41,38 +41,241 @@ def _get_rider_identity_and_availability(cursor, rider_id: int):
         "image_url": rider.ImageURL,
     }
 
+    try:
+        cursor.execute(
+            """
+            SELECT HasSX, HasMX
+            FROM RiderProfileAvailabilitySummary
+            WHERE RiderID = ?
+            """,
+            rider_id,
+        )
+        availability = cursor.fetchone()
+        if availability:
+            return rider_data, availability.HasSX == 1, availability.HasMX == 1
+    except pyodbc.Error:
+        pass
+
     cursor.execute(
         """
-SELECT
-    CASE WHEN EXISTS (
-        SELECT 1 FROM (
-            SELECT RiderID FROM SX_MAINS
-            UNION
-            SELECT RiderID FROM SX_HEATS
-            UNION
-            SELECT RiderID FROM SX_LCQS
-            UNION
-            SELECT RiderID FROM SX_QUAL
-        ) x
-        WHERE RiderID = ?
-    ) THEN 1 ELSE 0 END AS HasSX,
-    CASE WHEN EXISTS (
-        SELECT 1 FROM (
-            SELECT RiderID FROM MX_OVERALLS
-            UNION
-            SELECT RiderID FROM MX_CONSIS
-            UNION
-            SELECT RiderID FROM MX_QUAL
-        ) x
-        WHERE RiderID = ?
-    ) THEN 1 ELSE 0 END AS HasMX
-""",
+        SELECT
+            CASE WHEN EXISTS (
+                SELECT 1 FROM (
+                    SELECT RiderID FROM SX_MAINS
+                    UNION
+                    SELECT RiderID FROM SX_HEATS
+                    UNION
+                    SELECT RiderID FROM SX_LCQS
+                    UNION
+                    SELECT RiderID FROM SX_QUAL
+                ) x
+                WHERE RiderID = ?
+            ) THEN 1 ELSE 0 END AS HasSX,
+            CASE WHEN EXISTS (
+                SELECT 1 FROM (
+                    SELECT RiderID FROM MX_OVERALLS
+                    UNION
+                    SELECT RiderID FROM MX_CONSIS
+                    UNION
+                    SELECT RiderID FROM MX_QUAL
+                ) x
+                WHERE RiderID = ?
+            ) THEN 1 ELSE 0 END AS HasMX
+        """,
         rider_id,
         rider_id,
     )
 
     availability = cursor.fetchone()
     return rider_data, availability.HasSX == 1, availability.HasMX == 1
+
+
+def _get_sx_profile_payload_from_summary(cursor, rider_id: int):
+    try:
+        cursor.execute(
+            """
+            SELECT
+                [Year],
+                Class,
+                Brand,
+                Starts,
+                Best,
+                AvgMainResult,
+                Top10Count,
+                Top10Pct,
+                Top5Count,
+                Top5Pct,
+                Podiums,
+                PodiumPct,
+                Wins,
+                WinPct,
+                LapsLed,
+                AvgStart,
+                Holeshots,
+                TotalPoints
+            FROM RiderProfileSXStatsSummary
+            WHERE RiderID = ?
+            ORDER BY
+                CASE WHEN [Year] IS NULL THEN 1 ELSE 0 END,
+                [Year],
+                CASE
+                    WHEN [Year] IS NULL THEN
+                        CASE
+                            WHEN ClassID = 2 THEN 1
+                            WHEN ClassID = 1 THEN 2
+                            WHEN ClassID = 0 THEN 3
+                            ELSE 9
+                        END
+                    ELSE ClassID
+                END,
+                Brand
+            """,
+            rider_id,
+        )
+        columns = [col[0] for col in cursor.description]
+        stats = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+        cursor.execute(
+            """
+            SELECT
+                [Year],
+                Class,
+                Brand,
+                QualStarts,
+                Poles,
+                BestQual,
+                AvgQualResult,
+                HeatStarts,
+                BestHeat,
+                HeatWins,
+                AvgHeatResult,
+                LcqStarts,
+                BestLcq,
+                LcqTransfers,
+                LcqTransferPct,
+                LcqWins,
+                AvgLcqResult
+            FROM RiderProfileSXQualSummary
+            WHERE RiderID = ?
+            ORDER BY
+                CASE WHEN [Year] IS NULL THEN 1 ELSE 0 END,
+                [Year],
+                CASE
+                    WHEN [Year] IS NULL THEN
+                        CASE
+                            WHEN ClassID = 2 THEN 1
+                            WHEN ClassID = 1 THEN 2
+                            WHEN ClassID = 0 THEN 3
+                            ELSE 9
+                        END
+                    ELSE ClassID
+                END
+            """,
+            rider_id,
+        )
+        columns = [col[0] for col in cursor.description]
+        qual_stats = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    except pyodbc.Error:
+        return None
+
+    if not stats and not qual_stats:
+        return None
+
+    return {"stats": stats, "qual_stats": qual_stats}
+
+
+def _get_mx_profile_payload_from_summary(cursor, rider_id: int):
+    try:
+        cursor.execute(
+            """
+            SELECT
+                [Year],
+                Class,
+                Brand,
+                Starts,
+                BestOverall,
+                BestMoto,
+                AvgOverallFinish,
+                AvgMotoFinish,
+                AvgMoto1Finish,
+                AvgMoto2Finish,
+                Top10s,
+                Top10Pct,
+                Top5s,
+                Top5Pct,
+                Podiums,
+                PodiumPct,
+                Wins,
+                WinPct,
+                LapsLed,
+                Holeshots,
+                AvgStart,
+                TotalPoints
+            FROM RiderProfileMXStatsSummary
+            WHERE RiderID = ?
+            ORDER BY
+                CASE WHEN [Year] IS NULL THEN 1 ELSE 0 END,
+                [Year],
+                CASE
+                    WHEN [Year] IS NULL THEN
+                        CASE
+                            WHEN ClassID = 2 THEN 1
+                            WHEN ClassID = 1 THEN 2
+                            WHEN ClassID = 3 THEN 3
+                            WHEN ClassID = 0 THEN 3
+                            ELSE 9
+                        END
+                    ELSE ClassID
+                END,
+                Brand
+            """,
+            rider_id,
+        )
+        columns = [col[0] for col in cursor.description]
+        mx_stats = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+        cursor.execute(
+            """
+            SELECT
+                [Year],
+                Class,
+                Brand,
+                QualAppearances,
+                AvgQual,
+                BestQual,
+                Poles,
+                ConsiAppearances,
+                AvgConsi,
+                BestConsi,
+                ConsiWins
+            FROM RiderProfileMXQualSummary
+            WHERE RiderID = ?
+            ORDER BY
+                CASE WHEN [Year] IS NULL THEN 1 ELSE 0 END,
+                [Year],
+                CASE
+                    WHEN [Year] IS NULL THEN
+                        CASE
+                            WHEN ClassID = 2 THEN 1
+                            WHEN ClassID = 1 THEN 2
+                            WHEN ClassID = 3 THEN 3
+                            WHEN ClassID = 0 THEN 4
+                        END
+                    ELSE ClassID
+                END,
+                Brand
+            """,
+            rider_id,
+        )
+        columns = [col[0] for col in cursor.description]
+        mx_qual_stats = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    except pyodbc.Error:
+        return None
+
+    if not mx_stats and not mx_qual_stats:
+        return None
+
+    return {"mx_stats": mx_stats, "mx_qual_stats": mx_qual_stats}
 
 
 def _get_sx_profile_payload(cursor, rider_id: int):
@@ -775,9 +978,17 @@ def get_rider_profile(rider_id: int, sport: str = "SX"):
             rider_data, has_sx, has_mx = _get_rider_identity_and_availability(cursor, rider_id)
 
             if sport.upper() == "MX":
-                payload = _get_mx_profile_payload(cursor, rider_id)
+                payload = _get_mx_profile_payload_from_summary(cursor, rider_id)
+                if payload is None and has_mx:
+                    payload = _get_mx_profile_payload(cursor, rider_id)
+                if payload is None:
+                    payload = {"mx_stats": [], "mx_qual_stats": []}
             else:
-                payload = _get_sx_profile_payload(cursor, rider_id)
+                payload = _get_sx_profile_payload_from_summary(cursor, rider_id)
+                if payload is None and has_sx:
+                    payload = _get_sx_profile_payload(cursor, rider_id)
+                if payload is None:
+                    payload = {"stats": [], "qual_stats": []}
 
             return {
                 "rider": rider_data,
