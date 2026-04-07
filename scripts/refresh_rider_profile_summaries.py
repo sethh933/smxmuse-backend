@@ -1,4 +1,4 @@
-"""Refresh rider profile summary tables from raw SX/MX results data.
+"""Refresh rider summary tables from raw SX/MX results data.
 
 Run this after race imports, or on a scheduled cadence such as Saturday night:
     python scripts/refresh_rider_profile_summaries.py
@@ -54,7 +54,7 @@ def refresh_rider_profile_summaries():
 
         conn.commit()
 
-    print("Rider profile summary refresh complete.")
+    print("Rider summary refresh complete.")
 
 
 if __name__ == "__main__":

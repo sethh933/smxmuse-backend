@@ -278,6 +278,66 @@ def _get_mx_profile_payload_from_summary(cursor, rider_id: int):
     return {"mx_stats": mx_stats, "mx_qual_stats": mx_qual_stats}
 
 
+def _get_rider_race_results_from_summary(cursor, rider_id: int):
+    try:
+        cursor.execute(
+            """
+            SELECT
+                Result,
+                RaceID,
+                TrackID,
+                TrackName,
+                RaceDate,
+                Class,
+                Brand,
+                QualResult,
+                HeatResult,
+                LCQResult,
+                Discipline
+            FROM RiderRaceResultsSummary
+            WHERE RiderID = ?
+            ORDER BY RaceDate DESC, RaceID DESC
+            """,
+            rider_id,
+        )
+        columns = [column[0] for column in cursor.description]
+        results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    except pyodbc.Error:
+        return None
+
+    if not results:
+        return None
+
+    return results
+
+
+def _get_rider_points_from_summary(cursor, rider_id: int):
+    try:
+        cursor.execute(
+            """
+            SELECT
+                [Year],
+                Result,
+                Points,
+                Class,
+                Brand
+            FROM RiderPointsSummary
+            WHERE RiderID = ?
+            ORDER BY [Year] DESC, SortOrder, Class
+            """,
+            rider_id,
+        )
+        columns = [column[0] for column in cursor.description]
+        results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    except pyodbc.Error:
+        return None
+
+    if not results:
+        return None
+
+    return results
+
+
 def _get_sx_profile_payload(cursor, rider_id: int):
     cursor.execute(
         """
@@ -1190,6 +1250,10 @@ def get_rider_points_standings(rider_id: int):
         with pyodbc.connect(CONN_STR) as conn:
             cursor = conn.cursor()
 
+            summary_results = _get_rider_points_from_summary(cursor, rider_id)
+            if summary_results is not None:
+                return summary_results
+
             cursor.execute(
                 """
 DECLARE @RiderID INT = ?;
@@ -1330,6 +1394,10 @@ def get_rider_race_results(rider_id: int):
                 "country": rider.Country,
                 "image_url": rider.ImageURL,
             }
+
+            summary_results = _get_rider_race_results_from_summary(cursor, rider_id)
+            if summary_results is not None:
+                return {"rider": rider_data, "results": summary_results}
 
             cursor.execute(
                 """

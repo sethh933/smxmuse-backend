@@ -44,12 +44,12 @@ def refresh_caches(x_admin_token: Optional[str] = Header(default=None)):
 
     try:
         refresh_rider_profile_summaries()
-        rider_profile = {"refreshed": True}
+        rider_summaries = {"refreshed": True}
     except Exception as exc:
         raise HTTPException(
             status_code=500,
             detail={
-                "message": "Rider profile summary refresh failed.",
+                "message": "Rider summary refresh failed.",
                 "error": str(exc),
             },
         ) from exc
@@ -60,14 +60,14 @@ def refresh_caches(x_admin_token: Optional[str] = Header(default=None)):
         raise HTTPException(
             status_code=502,
             detail={
-                "message": "Rider profile summary refresh succeeded, but grid cache refresh failed.",
-                "rider_profile": rider_profile,
+                "message": "Rider summary refresh succeeded, but grid cache refresh failed.",
+                "rider_summaries": rider_summaries,
                 "grid_cache_error": str(exc),
             },
         ) from exc
 
     return {
         "message": "Refresh completed successfully.",
-        "rider_profile": rider_profile,
+        "rider_summaries": rider_summaries,
         "grid_cache": grid_cache,
     }

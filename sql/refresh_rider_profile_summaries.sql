@@ -119,6 +119,92 @@ BEGIN
 END;
 GO
 
+IF OBJECT_ID('dbo.RiderRaceResultsSummary', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.RiderRaceResultsSummary (
+        RiderID INT NOT NULL,
+        RaceID INT NOT NULL,
+        TrackID INT NULL,
+        TrackName NVARCHAR(255) NULL,
+        RaceDate DATE NOT NULL,
+        Discipline NVARCHAR(10) NOT NULL,
+        Class NVARCHAR(20) NULL,
+        Brand NVARCHAR(100) NULL,
+        Result NVARCHAR(20) NOT NULL,
+        QualResult NVARCHAR(20) NOT NULL,
+        HeatResult NVARCHAR(20) NOT NULL,
+        LCQResult NVARCHAR(20) NOT NULL,
+        RefreshedAt DATETIME2(0) NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+END;
+GO
+
+IF OBJECT_ID('dbo.RiderPointsSummary', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.RiderPointsSummary (
+        RiderID INT NOT NULL,
+        [Year] INT NOT NULL,
+        Result NVARCHAR(20) NOT NULL,
+        Points INT NOT NULL,
+        Class NVARCHAR(20) NOT NULL,
+        Brand NVARCHAR(200) NULL,
+        SortOrder INT NOT NULL,
+        RefreshedAt DATETIME2(0) NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+END;
+GO
+
+IF OBJECT_ID('dbo.SeasonSXMainStatsSummary', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.SeasonSXMainStatsSummary (
+        [Year] INT NOT NULL,
+        SportID INT NOT NULL,
+        ClassID INT NOT NULL,
+        RiderID INT NOT NULL,
+        FullName NVARCHAR(255) NULL,
+        DisplayFullName NVARCHAR(255) NULL,
+        RiderCoastID INT NULL,
+        Points INT NOT NULL,
+        Wins INT NOT NULL,
+        Podiums INT NOT NULL,
+        Top5s INT NOT NULL,
+        Top10s INT NOT NULL,
+        BestFinish INT NULL,
+        AvgFinish DECIMAL(10,2) NULL,
+        MainsMade INT NOT NULL,
+        Holeshots INT NOT NULL,
+        AvgStartPosition DECIMAL(10,2) NULL,
+        Brand NVARCHAR(100) NULL,
+        RefreshedAt DATETIME2(0) NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+END;
+GO
+
+IF OBJECT_ID('dbo.SeasonSXStartStatsSummary', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.SeasonSXStartStatsSummary (
+        [Year] INT NOT NULL,
+        SportID INT NOT NULL,
+        ClassID INT NOT NULL,
+        RiderID INT NOT NULL,
+        FullName NVARCHAR(255) NULL,
+        DisplayFullName NVARCHAR(255) NULL,
+        RiderCoastID INT NULL,
+        QualStarts INT NOT NULL,
+        Poles INT NOT NULL,
+        BestQual INT NULL,
+        AvgQualFinish DECIMAL(10,2) NULL,
+        HeatStarts INT NOT NULL,
+        HeatWins INT NOT NULL,
+        BestHeat INT NULL,
+        LCQStarts INT NOT NULL,
+        LCQWins INT NOT NULL,
+        BestLCQ INT NULL,
+        RefreshedAt DATETIME2(0) NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+END;
+GO
+
 IF NOT EXISTS (
     SELECT 1
     FROM sys.indexes
@@ -167,11 +253,63 @@ BEGIN
 END;
 GO
 
+IF NOT EXISTS (
+    SELECT 1
+    FROM sys.indexes
+    WHERE name = 'IX_RiderRaceResultsSummary_Rider'
+      AND object_id = OBJECT_ID('dbo.RiderRaceResultsSummary')
+)
+BEGIN
+    CREATE INDEX IX_RiderRaceResultsSummary_Rider
+        ON dbo.RiderRaceResultsSummary (RiderID, RaceDate DESC, RaceID);
+END;
+GO
+
+IF NOT EXISTS (
+    SELECT 1
+    FROM sys.indexes
+    WHERE name = 'IX_RiderPointsSummary_Rider'
+      AND object_id = OBJECT_ID('dbo.RiderPointsSummary')
+)
+BEGIN
+    CREATE INDEX IX_RiderPointsSummary_Rider
+        ON dbo.RiderPointsSummary (RiderID, [Year] DESC, SortOrder, Class);
+END;
+GO
+
+IF NOT EXISTS (
+    SELECT 1
+    FROM sys.indexes
+    WHERE name = 'IX_SeasonSXMainStatsSummary_Season'
+      AND object_id = OBJECT_ID('dbo.SeasonSXMainStatsSummary')
+)
+BEGIN
+    CREATE INDEX IX_SeasonSXMainStatsSummary_Season
+        ON dbo.SeasonSXMainStatsSummary ([Year], ClassID, RiderCoastID, RiderID);
+END;
+GO
+
+IF NOT EXISTS (
+    SELECT 1
+    FROM sys.indexes
+    WHERE name = 'IX_SeasonSXStartStatsSummary_Season'
+      AND object_id = OBJECT_ID('dbo.SeasonSXStartStatsSummary')
+)
+BEGIN
+    CREATE INDEX IX_SeasonSXStartStatsSummary_Season
+        ON dbo.SeasonSXStartStatsSummary ([Year], ClassID, RiderCoastID, RiderID);
+END;
+GO
+
 TRUNCATE TABLE dbo.RiderProfileAvailabilitySummary;
 TRUNCATE TABLE dbo.RiderProfileSXStatsSummary;
 TRUNCATE TABLE dbo.RiderProfileSXQualSummary;
 TRUNCATE TABLE dbo.RiderProfileMXStatsSummary;
 TRUNCATE TABLE dbo.RiderProfileMXQualSummary;
+TRUNCATE TABLE dbo.RiderRaceResultsSummary;
+TRUNCATE TABLE dbo.RiderPointsSummary;
+TRUNCATE TABLE dbo.SeasonSXMainStatsSummary;
+TRUNCATE TABLE dbo.SeasonSXStartStatsSummary;
 GO
 
 INSERT INTO dbo.RiderProfileAvailabilitySummary (RiderID, HasSX, HasMX)
@@ -202,6 +340,292 @@ LEFT JOIN (
         SELECT RiderID FROM MX_QUAL
     ) mx_all
 ) mx ON mx.RiderID = rl.RiderID;
+GO
+
+WITH SX_WithTies AS (
+    SELECT
+        Year,
+        RiderID,
+        Points,
+        ClassID,
+        RiderCoastID,
+        CASE
+            WHEN COUNT(*) OVER (
+                PARTITION BY Year, ClassID, RiderCoastID, Result
+            ) > 1
+                THEN 'T-' + CAST(Result AS VARCHAR)
+            ELSE CAST(Result AS VARCHAR)
+        END AS ResultDisplay
+    FROM SX_POINTS_STANDINGS
+),
+MX_WithTies AS (
+    SELECT
+        Year,
+        RiderID,
+        Points,
+        ClassID,
+        CASE
+            WHEN COUNT(*) OVER (
+                PARTITION BY Year, ClassID, Result
+            ) > 1
+                THEN 'T-' + CAST(Result AS VARCHAR)
+            ELSE CAST(Result AS VARCHAR)
+        END AS ResultDisplay
+    FROM MX_POINTS_STANDINGS
+),
+Brands AS (
+    SELECT
+        RiderID,
+        Year,
+        ClassID,
+        SportID,
+        STRING_AGG(Brand, ', ') AS Brand
+    FROM (
+        SELECT DISTINCT
+            RiderID,
+            Year,
+            ClassID,
+            SportID,
+            Brand
+        FROM RiderBrandListYear
+    ) x
+    GROUP BY
+        RiderID,
+        Year,
+        ClassID,
+        SportID
+)
+INSERT INTO dbo.RiderPointsSummary (
+    RiderID, [Year], Result, Points, Class, Brand, SortOrder
+)
+SELECT
+    s.RiderID,
+    s.Year,
+    s.ResultDisplay AS Result,
+    s.Points,
+    CASE
+        WHEN s.ClassID = 1 THEN '450SX'
+        WHEN s.ClassID = 2 AND s.RiderCoastID = 1 THEN '250SX W'
+        WHEN s.ClassID = 2 AND s.RiderCoastID = 2 THEN '250SX E'
+    END AS Class,
+    b.Brand,
+    1 AS SortOrder
+FROM SX_WithTies s
+LEFT JOIN Brands b
+    ON b.RiderID = s.RiderID
+   AND b.Year = s.Year
+   AND b.ClassID = s.ClassID
+   AND b.SportID = 1
+UNION ALL
+SELECT
+    m.RiderID,
+    m.Year,
+    m.ResultDisplay,
+    m.Points,
+    CASE
+        WHEN m.ClassID = 1 THEN '450MX'
+        WHEN m.ClassID = 2 THEN '250MX'
+        WHEN m.ClassID = 3 THEN '500MX'
+    END,
+    b.Brand,
+    0 AS SortOrder
+FROM MX_WithTies m
+LEFT JOIN Brands b
+    ON b.RiderID = m.RiderID
+   AND b.Year = m.Year
+   AND b.ClassID = m.ClassID
+   AND b.SportID = 2;
+GO
+
+WITH CoastPoolResolved AS (
+    SELECT
+        RiderID,
+        [Year],
+        MIN(RiderCoastID) AS RiderCoastID
+    FROM CoastPool
+    GROUP BY RiderID, [Year]
+),
+MainStatsRaw AS (
+    SELECT DISTINCT *
+    FROM dbo.vw_SeasonMainEventStats
+    WHERE SportID = 1
+),
+MainStats AS (
+    SELECT *
+    FROM (
+        SELECT
+            msr.*,
+            ROW_NUMBER() OVER (
+                PARTITION BY msr.[Year], msr.SportID, msr.ClassID, msr.RiderID
+                ORDER BY
+                    CASE WHEN msr.RiderCoastID IS NULL THEN 0 ELSE 1 END,
+                    msr.Wins DESC,
+                    msr.AvgFinish ASC,
+                    msr.Points DESC
+            ) AS rn
+        FROM MainStatsRaw msr
+    ) ranked
+    WHERE rn = 1
+),
+BrandAgg AS (
+    SELECT
+        rt.[Year],
+        1 AS SportID,
+        sm.ClassID,
+        sm.RiderID,
+        MAX(sm.Brand) AS Brand,
+        COALESCE(sm.RiderCoastID, cp.RiderCoastID) AS RiderCoastID
+    FROM SX_MAINS sm
+    JOIN Race_Table rt
+        ON rt.RaceID = sm.RaceID
+    LEFT JOIN CoastPoolResolved cp
+        ON cp.RiderID = sm.RiderID
+       AND cp.[Year] = rt.[Year]
+    WHERE rt.SportID = 1
+    GROUP BY
+        rt.[Year],
+        sm.ClassID,
+        sm.RiderID,
+        COALESCE(sm.RiderCoastID, cp.RiderCoastID)
+)
+INSERT INTO dbo.SeasonSXMainStatsSummary (
+    [Year], SportID, ClassID, RiderID, FullName, DisplayFullName, RiderCoastID,
+    Points, Wins, Podiums, Top5s, Top10s, BestFinish, AvgFinish, MainsMade,
+    Holeshots, AvgStartPosition, Brand
+)
+SELECT
+    ms.[Year],
+    ms.SportID,
+    ms.ClassID,
+    ms.RiderID,
+    ms.FullName,
+    COALESCE(rl.FullName, ms.FullName) AS DisplayFullName,
+    ms.RiderCoastID,
+    COALESCE(ms.Points, 0) AS Points,
+    COALESCE(ms.Wins, 0) AS Wins,
+    COALESCE(ms.Podiums, 0) AS Podiums,
+    COALESCE(ms.Top5s, 0) AS Top5s,
+    COALESCE(ms.Top10s, 0) AS Top10s,
+    ms.BestFinish,
+    ms.AvgFinish,
+    COALESCE(ms.MainsMade, 0) AS MainsMade,
+    COALESCE(ms.Holeshots, 0) AS Holeshots,
+    ms.AvgStartPosition,
+    ba.Brand
+FROM MainStats ms
+LEFT JOIN Rider_List rl
+    ON rl.RiderID = ms.RiderID
+LEFT JOIN BrandAgg ba
+    ON ba.[Year] = ms.[Year]
+   AND ba.SportID = ms.SportID
+   AND ba.ClassID = ms.ClassID
+   AND ba.RiderID = ms.RiderID
+   AND (
+        (ba.RiderCoastID = ms.RiderCoastID)
+        OR (ba.RiderCoastID IS NULL AND ms.RiderCoastID IS NULL)
+   );
+GO
+
+WITH CoastPoolResolved AS (
+    SELECT
+        RiderID,
+        [Year],
+        MIN(RiderCoastID) AS RiderCoastID
+    FROM CoastPool
+    GROUP BY RiderID, [Year]
+),
+Base AS (
+    SELECT
+        rt.[Year],
+        1 AS SportID,
+        q.ClassID,
+        q.RiderID,
+        COALESCE(rl.FullName, q.FullName) AS FullName,
+        COALESCE(q.RiderCoastID, cp.RiderCoastID) AS RiderCoastID,
+        'QUAL' AS SessionType,
+        q.Result
+    FROM SX_QUAL q
+    JOIN Race_Table rt
+        ON rt.RaceID = q.RaceID
+    LEFT JOIN Rider_List rl
+        ON rl.RiderID = q.RiderID
+    LEFT JOIN CoastPoolResolved cp
+        ON cp.RiderID = q.RiderID
+       AND cp.[Year] = rt.[Year]
+    WHERE rt.SportID = 1
+
+    UNION ALL
+
+    SELECT
+        rt.[Year],
+        1 AS SportID,
+        h.ClassID,
+        h.RiderID,
+        COALESCE(rl.FullName, h.FullName) AS FullName,
+        COALESCE(h.RiderCoastID, cp.RiderCoastID) AS RiderCoastID,
+        'HEAT' AS SessionType,
+        h.Result
+    FROM SX_HEATS h
+    JOIN Race_Table rt
+        ON rt.RaceID = h.RaceID
+    LEFT JOIN Rider_List rl
+        ON rl.RiderID = h.RiderID
+    LEFT JOIN CoastPoolResolved cp
+        ON cp.RiderID = h.RiderID
+       AND cp.[Year] = rt.[Year]
+    WHERE rt.SportID = 1
+
+    UNION ALL
+
+    SELECT
+        rt.[Year],
+        1 AS SportID,
+        l.ClassID,
+        l.RiderID,
+        COALESCE(rl.FullName, l.FullName) AS FullName,
+        COALESCE(l.RiderCoastID, cp.RiderCoastID) AS RiderCoastID,
+        'LCQ' AS SessionType,
+        l.Result
+    FROM SX_LCQS l
+    JOIN Race_Table rt
+        ON rt.RaceID = l.RaceID
+    LEFT JOIN Rider_List rl
+        ON rl.RiderID = l.RiderID
+    LEFT JOIN CoastPoolResolved cp
+        ON cp.RiderID = l.RiderID
+       AND cp.[Year] = rt.[Year]
+    WHERE rt.SportID = 1
+)
+INSERT INTO dbo.SeasonSXStartStatsSummary (
+    [Year], SportID, ClassID, RiderID, FullName, DisplayFullName, RiderCoastID,
+    QualStarts, Poles, BestQual, AvgQualFinish,
+    HeatStarts, HeatWins, BestHeat,
+    LCQStarts, LCQWins, BestLCQ
+)
+SELECT
+    [Year],
+    SportID,
+    ClassID,
+    RiderID,
+    MAX(FullName) AS FullName,
+    MAX(FullName) AS DisplayFullName,
+    MAX(RiderCoastID) AS RiderCoastID,
+    SUM(CASE WHEN SessionType = 'QUAL' THEN 1 ELSE 0 END) AS QualStarts,
+    SUM(CASE WHEN SessionType = 'QUAL' AND Result = 1 THEN 1 ELSE 0 END) AS Poles,
+    MIN(CASE WHEN SessionType = 'QUAL' THEN Result END) AS BestQual,
+    CAST(ROUND(AVG(CASE WHEN SessionType = 'QUAL' THEN CAST(Result AS DECIMAL(10,2)) END), 2) AS DECIMAL(10,2)) AS AvgQualFinish,
+    SUM(CASE WHEN SessionType = 'HEAT' THEN 1 ELSE 0 END) AS HeatStarts,
+    SUM(CASE WHEN SessionType = 'HEAT' AND Result = 1 THEN 1 ELSE 0 END) AS HeatWins,
+    MIN(CASE WHEN SessionType = 'HEAT' THEN Result END) AS BestHeat,
+    SUM(CASE WHEN SessionType = 'LCQ' THEN 1 ELSE 0 END) AS LCQStarts,
+    SUM(CASE WHEN SessionType = 'LCQ' AND Result = 1 THEN 1 ELSE 0 END) AS LCQWins,
+    MIN(CASE WHEN SessionType = 'LCQ' THEN Result END) AS BestLCQ
+FROM Base
+GROUP BY
+    [Year],
+    SportID,
+    ClassID,
+    RiderID;
 GO
 
 WITH sx_base AS (
@@ -863,4 +1287,132 @@ SELECT
     BestConsi,
     ConsiWins
 FROM CareerOverall;
+GO
+
+WITH SX_RiderRaceClasses AS (
+    SELECT DISTINCT RiderID, RaceID, ClassID
+    FROM (
+        SELECT RiderID, RaceID, ClassID FROM SX_MAINS
+        UNION ALL
+        SELECT RiderID, RaceID, ClassID FROM SX_HEATS
+        UNION ALL
+        SELECT RiderID, RaceID, ClassID FROM SX_LCQS
+        UNION ALL
+        SELECT RiderID, RaceID, ClassID FROM SX_QUAL
+    ) x
+),
+SX_MainResults AS (
+    SELECT RiderID, RaceID, ClassID, Result, Brand
+    FROM SX_MAINS
+),
+SX_HeatResults AS (
+    SELECT RiderID, RaceID, ClassID, MIN(Result) AS HeatResult, MAX(Brand) AS Brand
+    FROM SX_HEATS
+    GROUP BY RiderID, RaceID, ClassID
+),
+SX_LCQResults AS (
+    SELECT RiderID, RaceID, ClassID, MIN(Result) AS LCQResult, MAX(Brand) AS Brand
+    FROM SX_LCQS
+    GROUP BY RiderID, RaceID, ClassID
+),
+SX_QualResults AS (
+    SELECT RiderID, RaceID, ClassID, MIN(Result) AS QualResult, MAX(Brand) AS Brand
+    FROM SX_QUAL
+    GROUP BY RiderID, RaceID, ClassID
+),
+SXResults AS (
+    SELECT
+        rc.RiderID,
+        rt.RaceID,
+        rt.TrackID,
+        rt.TrackName,
+        CAST(rt.RaceDate AS DATE) AS RaceDate,
+        'SX' AS Discipline,
+        CASE
+            WHEN rc.ClassID = 1 THEN '450SX'
+            WHEN rc.ClassID = 2 THEN '250SX'
+            ELSE '-'
+        END AS Class,
+        COALESCE(q.Brand, h.Brand, l.Brand, m.Brand, '-') AS Brand,
+        COALESCE(CAST(m.Result AS VARCHAR(20)), '-') AS Result,
+        COALESCE(CAST(q.QualResult AS VARCHAR(20)), '-') AS QualResult,
+        COALESCE(CAST(h.HeatResult AS VARCHAR(20)), '-') AS HeatResult,
+        COALESCE(CAST(l.LCQResult AS VARCHAR(20)), '-') AS LCQResult
+    FROM SX_RiderRaceClasses rc
+    JOIN Race_Table rt
+        ON rt.RaceID = rc.RaceID
+    LEFT JOIN SX_MainResults m
+        ON m.RiderID = rc.RiderID
+       AND m.RaceID = rc.RaceID
+       AND m.ClassID = rc.ClassID
+    LEFT JOIN SX_HeatResults h
+        ON h.RiderID = rc.RiderID
+       AND h.RaceID = rc.RaceID
+       AND h.ClassID = rc.ClassID
+    LEFT JOIN SX_LCQResults l
+        ON l.RiderID = rc.RiderID
+       AND l.RaceID = rc.RaceID
+       AND l.ClassID = rc.ClassID
+    LEFT JOIN SX_QualResults q
+        ON q.RiderID = rc.RiderID
+       AND q.RaceID = rc.RaceID
+       AND q.ClassID = rc.ClassID
+    WHERE rt.SportID = 1
+),
+MX_RiderRaces AS (
+    SELECT DISTINCT RiderID, RaceID
+    FROM (
+        SELECT RiderID, RaceID FROM MX_OVERALLS
+        UNION ALL
+        SELECT RiderID, RaceID FROM MX_CONSIS
+        UNION ALL
+        SELECT RiderID, RaceID FROM MX_QUAL
+    ) x
+),
+MXResults AS (
+    SELECT
+        rr.RiderID,
+        rt.RaceID,
+        rt.TrackID,
+        rt.TrackName,
+        CAST(rt.RaceDate AS DATE) AS RaceDate,
+        'MX' AS Discipline,
+        CASE
+            WHEN COALESCE(mo.ClassID, mq.ClassID, mc.ClassID) = 1 THEN '450MX'
+            WHEN COALESCE(mo.ClassID, mq.ClassID, mc.ClassID) = 2 THEN '250MX'
+            WHEN COALESCE(mo.ClassID, mq.ClassID, mc.ClassID) = 3 THEN '500MX'
+            ELSE '-'
+        END AS Class,
+        COALESCE(mo.Brand, mq.Brand, mc.Brand, '-') AS Brand,
+        COALESCE(CAST(mo.Result AS VARCHAR(20)), '-') AS Result,
+        COALESCE(CAST(mq.Result AS VARCHAR(20)), '-') AS QualResult,
+        '-' AS HeatResult,
+        COALESCE(CAST(mc.Result AS VARCHAR(20)), '-') AS LCQResult
+    FROM MX_RiderRaces rr
+    JOIN Race_Table rt
+        ON rt.RaceID = rr.RaceID
+    LEFT JOIN MX_OVERALLS mo
+        ON mo.RaceID = rr.RaceID
+       AND mo.RiderID = rr.RiderID
+    LEFT JOIN MX_QUAL mq
+        ON mq.RaceID = rr.RaceID
+       AND mq.RiderID = rr.RiderID
+    LEFT JOIN MX_CONSIS mc
+        ON mc.RaceID = rr.RaceID
+       AND mc.RiderID = rr.RiderID
+    WHERE rt.SportID = 2
+)
+INSERT INTO dbo.RiderRaceResultsSummary (
+    RiderID, RaceID, TrackID, TrackName, RaceDate, Discipline, Class, Brand,
+    Result, QualResult, HeatResult, LCQResult
+)
+SELECT
+    RiderID, RaceID, TrackID, TrackName, RaceDate, Discipline, Class, Brand,
+    Result, QualResult, HeatResult, LCQResult
+FROM SXResults
+UNION ALL
+SELECT
+    RiderID, RaceID, TrackID, TrackName, RaceDate, Discipline, Class, Brand,
+    Result, QualResult, HeatResult, LCQResult
+FROM MXResults;
 GO

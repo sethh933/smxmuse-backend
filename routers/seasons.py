@@ -8,6 +8,73 @@ from error_utils import raise_http_error
 router = APIRouter()
 
 
+def _get_sx_season_main_stats_from_summary(year: int, classid: int, ridercoastid: int = None):
+    query = """
+        SELECT
+            [Year],
+            SportID,
+            ClassID,
+            RiderID,
+            FullName,
+            DisplayFullName,
+            RiderCoastID,
+            Points,
+            Wins,
+            Podiums,
+            Top5s,
+            Top10s,
+            BestFinish,
+            AvgFinish,
+            MainsMade,
+            Holeshots,
+            AvgStartPosition,
+            Brand
+        FROM dbo.SeasonSXMainStatsSummary
+        WHERE [Year] = :year
+          AND SportID = 1
+          AND ClassID = :classid
+    """
+
+    if ridercoastid is not None:
+        query += " AND RiderCoastID = :ridercoastid"
+
+    query += " ORDER BY Wins DESC, AvgFinish ASC"
+
+    return fetch_all(query, locals())
+
+
+def _get_sx_season_start_stats_from_summary(year: int, classid: int, ridercoastid: int = None):
+    query = """
+        SELECT
+            [Year],
+            SportID,
+            ClassID,
+            RiderID,
+            FullName,
+            DisplayFullName,
+            RiderCoastID,
+            QualStarts,
+            Poles,
+            BestQual,
+            AvgQualFinish,
+            HeatStarts,
+            HeatWins,
+            BestHeat,
+            LCQStarts,
+            LCQWins,
+            BestLCQ
+        FROM dbo.SeasonSXStartStatsSummary
+        WHERE [Year] = :year
+          AND SportID = 1
+          AND ClassID = :classid
+    """
+
+    if ridercoastid is not None:
+        query += " AND RiderCoastID = :ridercoastid"
+
+    return fetch_all(query, locals())
+
+
 @router.get("/api/season/main-stats")
 def get_season_main_stats(
     year: int,
@@ -15,6 +82,11 @@ def get_season_main_stats(
     classid: int,
     ridercoastid: int = None
 ):
+    if sportid == 1:
+        summary_results = _get_sx_season_main_stats_from_summary(year, classid, ridercoastid)
+        if summary_results:
+            return summary_results
+
     query = """
         WITH CoastPoolResolved AS (
             SELECT
@@ -106,6 +178,10 @@ def get_season_start_stats(
     ridercoastid: int = None
 ):
     if sportid == 1:
+        summary_results = _get_sx_season_start_stats_from_summary(year, classid, ridercoastid)
+        if summary_results:
+            return summary_results
+
         query = """
             WITH CoastPoolResolved AS (
                 SELECT
