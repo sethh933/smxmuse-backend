@@ -205,6 +205,49 @@ BEGIN
 END;
 GO
 
+IF OBJECT_ID('dbo.SeasonMXOverallSummary', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.SeasonMXOverallSummary (
+        [Year] INT NOT NULL,
+        ClassID INT NOT NULL,
+        RiderID INT NOT NULL,
+        FullName NVARCHAR(255) NULL,
+        Brand NVARCHAR(100) NULL,
+        Starts INT NOT NULL,
+        Wins INT NOT NULL,
+        Podiums INT NOT NULL,
+        Top5 INT NOT NULL,
+        Top10 INT NOT NULL,
+        BestOverall INT NULL,
+        AvgOverall DECIMAL(10,2) NULL,
+        Holeshots INT NOT NULL,
+        AvgStart DECIMAL(10,2) NULL,
+        Points INT NOT NULL,
+        RefreshedAt DATETIME2(0) NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+END;
+GO
+
+IF OBJECT_ID('dbo.SeasonMXMotoQualSummary', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.SeasonMXMotoQualSummary (
+        [Year] INT NOT NULL,
+        ClassID INT NOT NULL,
+        RiderID INT NOT NULL,
+        FullName NVARCHAR(255) NULL,
+        MotoWins INT NOT NULL,
+        MotoPodiums INT NOT NULL,
+        BestMoto INT NULL,
+        AvgMoto DECIMAL(10,2) NULL,
+        Poles INT NOT NULL,
+        QualStarts INT NOT NULL,
+        AvgQual DECIMAL(10,2) NOT NULL,
+        ConsiWins INT NOT NULL,
+        RefreshedAt DATETIME2(0) NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+END;
+GO
+
 IF NOT EXISTS (
     SELECT 1
     FROM sys.indexes
@@ -301,6 +344,30 @@ BEGIN
 END;
 GO
 
+IF NOT EXISTS (
+    SELECT 1
+    FROM sys.indexes
+    WHERE name = 'IX_SeasonMXOverallSummary_Season'
+      AND object_id = OBJECT_ID('dbo.SeasonMXOverallSummary')
+)
+BEGIN
+    CREATE INDEX IX_SeasonMXOverallSummary_Season
+        ON dbo.SeasonMXOverallSummary ([Year], ClassID, RiderID);
+END;
+GO
+
+IF NOT EXISTS (
+    SELECT 1
+    FROM sys.indexes
+    WHERE name = 'IX_SeasonMXMotoQualSummary_Season'
+      AND object_id = OBJECT_ID('dbo.SeasonMXMotoQualSummary')
+)
+BEGIN
+    CREATE INDEX IX_SeasonMXMotoQualSummary_Season
+        ON dbo.SeasonMXMotoQualSummary ([Year], ClassID, RiderID);
+END;
+GO
+
 TRUNCATE TABLE dbo.RiderProfileAvailabilitySummary;
 TRUNCATE TABLE dbo.RiderProfileSXStatsSummary;
 TRUNCATE TABLE dbo.RiderProfileSXQualSummary;
@@ -310,6 +377,8 @@ TRUNCATE TABLE dbo.RiderRaceResultsSummary;
 TRUNCATE TABLE dbo.RiderPointsSummary;
 TRUNCATE TABLE dbo.SeasonSXMainStatsSummary;
 TRUNCATE TABLE dbo.SeasonSXStartStatsSummary;
+TRUNCATE TABLE dbo.SeasonMXOverallSummary;
+TRUNCATE TABLE dbo.SeasonMXMotoQualSummary;
 GO
 
 INSERT INTO dbo.RiderProfileAvailabilitySummary (RiderID, HasSX, HasMX)
@@ -626,6 +695,205 @@ GROUP BY
     SportID,
     ClassID,
     RiderID;
+GO
+
+WITH Base AS (
+    SELECT
+        rt.[Year],
+        mo.ClassID,
+        mo.RiderID,
+        mo.FullName,
+        mo.Brand,
+        mo.Result,
+        ISNULL(mo.Holeshot, 0) AS Holeshot,
+        mo.M1_Start,
+        mo.M2_Start,
+        ps.Points AS StandingPoints
+    FROM MX_OVERALLS mo
+    JOIN Race_Table rt
+        ON rt.RaceID = mo.RaceID
+    LEFT JOIN MX_POINTS_STANDINGS ps
+        ON ps.RiderID = mo.RiderID
+       AND ps.[Year] = rt.[Year]
+       AND ps.ClassID = mo.ClassID
+    WHERE rt.SportID = 2
+),
+StartsCalc AS (
+    SELECT
+        *,
+        CASE
+            WHEN M1_Start IS NOT NULL AND M2_Start IS NOT NULL THEN (M1_Start + M2_Start) / 2.0
+            WHEN M1_Start IS NOT NULL THEN M1_Start
+            WHEN M2_Start IS NOT NULL THEN M2_Start
+        END AS AvgStartRace
+    FROM Base
+)
+INSERT INTO dbo.SeasonMXOverallSummary (
+    [Year], ClassID, RiderID, FullName, Brand, Starts, Wins, Podiums, Top5,
+    Top10, BestOverall, AvgOverall, Holeshots, AvgStart, Points
+)
+SELECT
+    [Year],
+    ClassID,
+    RiderID,
+    MAX(FullName) AS FullName,
+    MAX(Brand) AS Brand,
+    COUNT(*) AS Starts,
+    SUM(CASE WHEN Result = 1 THEN 1 ELSE 0 END) AS Wins,
+    SUM(CASE WHEN Result <= 3 THEN 1 ELSE 0 END) AS Podiums,
+    SUM(CASE WHEN Result <= 5 THEN 1 ELSE 0 END) AS Top5,
+    SUM(CASE WHEN Result <= 10 THEN 1 ELSE 0 END) AS Top10,
+    MIN(Result) AS BestOverall,
+    CAST(AVG(CAST(Result AS FLOAT)) AS DECIMAL(10,2)) AS AvgOverall,
+    SUM(Holeshot) AS Holeshots,
+    CAST(AVG(AvgStartRace) AS DECIMAL(10,2)) AS AvgStart,
+    COALESCE(MAX(StandingPoints), 0) AS Points
+FROM StartsCalc
+GROUP BY
+    [Year],
+    ClassID,
+    RiderID;
+GO
+
+WITH HasQualBySeason AS (
+    SELECT
+        rt.[Year],
+        mq.ClassID,
+        COUNT(*) AS Cnt
+    FROM MX_QUAL mq
+    JOIN Race_Table rt
+        ON rt.RaceID = mq.RaceID
+    WHERE rt.SportID = 2
+    GROUP BY
+        rt.[Year],
+        mq.ClassID
+),
+RiderBase AS (
+    SELECT DISTINCT
+        rt.[Year],
+        mo.ClassID,
+        mo.RiderID,
+        mo.FullName
+    FROM MX_OVERALLS mo
+    JOIN Race_Table rt
+        ON rt.RaceID = mo.RaceID
+    WHERE rt.SportID = 2
+
+    UNION
+
+    SELECT DISTINCT
+        rt.[Year],
+        mq.ClassID,
+        mq.RiderID,
+        mq.FullName
+    FROM MX_QUAL mq
+    JOIN Race_Table rt
+        ON rt.RaceID = mq.RaceID
+    LEFT JOIN HasQualBySeason hq
+        ON hq.[Year] = rt.[Year]
+       AND hq.ClassID = mq.ClassID
+    WHERE rt.SportID = 2
+      AND ISNULL(hq.Cnt, 0) > 0
+),
+Base AS (
+    SELECT
+        rt.[Year],
+        mo.ClassID,
+        mo.RiderID,
+        mo.FullName,
+        mo.Moto1,
+        mo.Moto2
+    FROM MX_OVERALLS mo
+    JOIN Race_Table rt
+        ON rt.RaceID = mo.RaceID
+    WHERE rt.SportID = 2
+),
+MotoStats AS (
+    SELECT
+        [Year],
+        ClassID,
+        RiderID,
+        MAX(FullName) AS FullName,
+        SUM(CASE WHEN Moto = 1 THEN 1 ELSE 0 END) AS MotoWins,
+        SUM(CASE WHEN Moto <= 3 THEN 1 ELSE 0 END) AS MotoPodiums,
+        MIN(Moto) AS BestMoto,
+        CAST(AVG(CAST(Moto AS FLOAT)) AS DECIMAL(10,2)) AS AvgMoto
+    FROM (
+        SELECT [Year], ClassID, RiderID, FullName, Moto1 AS Moto FROM Base WHERE Moto1 IS NOT NULL
+        UNION ALL
+        SELECT [Year], ClassID, RiderID, FullName, Moto2 AS Moto FROM Base WHERE Moto2 IS NOT NULL
+    ) x
+    GROUP BY
+        [Year],
+        ClassID,
+        RiderID
+),
+QualStats AS (
+    SELECT
+        rt.[Year],
+        mq.ClassID,
+        mq.RiderID,
+        COUNT(*) AS QualStarts,
+        SUM(CASE WHEN mq.Result = 1 THEN 1 ELSE 0 END) AS Poles,
+        CAST(AVG(CAST(mq.Result AS FLOAT)) AS DECIMAL(10,2)) AS AvgQual
+    FROM MX_QUAL mq
+    JOIN Race_Table rt
+        ON rt.RaceID = mq.RaceID
+    WHERE rt.SportID = 2
+    GROUP BY
+        rt.[Year],
+        mq.ClassID,
+        mq.RiderID
+),
+ConsiStats AS (
+    SELECT
+        rt.[Year],
+        mc.ClassID,
+        mc.RiderID,
+        SUM(CASE WHEN mc.Result = 1 THEN 1 ELSE 0 END) AS ConsiWins
+    FROM MX_CONSIS mc
+    JOIN Race_Table rt
+        ON rt.RaceID = mc.RaceID
+    WHERE rt.SportID = 2
+    GROUP BY
+        rt.[Year],
+        mc.ClassID,
+        mc.RiderID
+)
+INSERT INTO dbo.SeasonMXMotoQualSummary (
+    [Year], ClassID, RiderID, FullName, MotoWins, MotoPodiums, BestMoto,
+    AvgMoto, Poles, QualStarts, AvgQual, ConsiWins
+)
+SELECT
+    r.[Year],
+    r.ClassID,
+    r.RiderID,
+    MAX(r.FullName) AS FullName,
+    ISNULL(MAX(m.MotoWins), 0) AS MotoWins,
+    ISNULL(MAX(m.MotoPodiums), 0) AS MotoPodiums,
+    MAX(m.BestMoto) AS BestMoto,
+    MAX(m.AvgMoto) AS AvgMoto,
+    ISNULL(MAX(q.Poles), 0) AS Poles,
+    ISNULL(MAX(q.QualStarts), 0) AS QualStarts,
+    ISNULL(MAX(q.AvgQual), 0) AS AvgQual,
+    ISNULL(MAX(c.ConsiWins), 0) AS ConsiWins
+FROM RiderBase r
+LEFT JOIN MotoStats m
+    ON m.[Year] = r.[Year]
+   AND m.ClassID = r.ClassID
+   AND m.RiderID = r.RiderID
+LEFT JOIN QualStats q
+    ON q.[Year] = r.[Year]
+   AND q.ClassID = r.ClassID
+   AND q.RiderID = r.RiderID
+LEFT JOIN ConsiStats c
+    ON c.[Year] = r.[Year]
+   AND c.ClassID = r.ClassID
+   AND c.RiderID = r.RiderID
+GROUP BY
+    r.[Year],
+    r.ClassID,
+    r.RiderID;
 GO
 
 WITH sx_base AS (

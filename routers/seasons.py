@@ -75,6 +75,56 @@ def _get_sx_season_start_stats_from_summary(year: int, classid: int, ridercoasti
     return fetch_all(query, locals())
 
 
+def _get_mx_season_overall_from_summary(year: int, classid: int):
+    query = """
+        SELECT
+            RiderID,
+            FullName,
+            Brand,
+            Starts,
+            Wins,
+            Podiums,
+            Top5,
+            Top10,
+            BestOverall,
+            AvgOverall,
+            Holeshots,
+            AvgStart,
+            Points
+        FROM dbo.SeasonMXOverallSummary
+        WHERE [Year] = :year
+          AND ClassID = :classid
+        ORDER BY Points DESC
+    """
+
+    return fetch_all(query, locals())
+
+
+def _get_mx_season_moto_qual_from_summary(year: int, classid: int):
+    query = """
+        SELECT
+            RiderID,
+            FullName,
+            MotoWins,
+            MotoPodiums,
+            BestMoto,
+            AvgMoto,
+            Poles,
+            QualStarts,
+            AvgQual,
+            ConsiWins
+        FROM dbo.SeasonMXMotoQualSummary
+        WHERE [Year] = :year
+          AND ClassID = :classid
+        ORDER BY
+            CASE WHEN AvgMoto IS NULL THEN 1 ELSE 0 END,
+            AvgMoto ASC,
+            AvgQual DESC
+    """
+
+    return fetch_all(query, locals())
+
+
 @router.get("/api/season/main-stats")
 def get_season_main_stats(
     year: int,
@@ -390,6 +440,10 @@ def get_season_points_progression(
 
 @router.get("/api/mx/season/overall")
 def get_mx_season_overall(year: int, classid: int):
+    summary_results = _get_mx_season_overall_from_summary(year, classid)
+    if summary_results:
+        return summary_results
+
     query = """
     WITH Base AS (
     SELECT
@@ -457,6 +511,10 @@ ORDER BY Points DESC
 
 @router.get("/api/mx/season/moto-qual")
 def get_mx_season_moto_qual(year: int, classid: int):
+    summary_results = _get_mx_season_moto_qual_from_summary(year, classid)
+    if summary_results:
+        return summary_results
+
     query = """
     WITH HasQual AS (
     SELECT COUNT(*) AS Cnt
