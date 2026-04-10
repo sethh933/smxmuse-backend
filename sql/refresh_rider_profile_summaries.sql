@@ -536,6 +536,52 @@ MainStats AS (
     ) ranked
     WHERE rn = 1
 ),
+SeasonStartAgg AS (
+    SELECT
+        starts_union.[Year],
+        starts_union.ClassID,
+        starts_union.RiderID,
+        starts_union.RiderCoastID,
+        CAST(ROUND(AVG(CAST(starts_union.[Start] AS DECIMAL(10,2))), 2) AS DECIMAL(10,2)) AS AvgStartPosition
+    FROM (
+        SELECT
+            rt.[Year],
+            sm.ClassID,
+            sm.RiderID,
+            COALESCE(sm.RiderCoastID, cp.RiderCoastID) AS RiderCoastID,
+            sm.[Start]
+        FROM SX_MAINS sm
+        JOIN Race_Table rt
+            ON rt.RaceID = sm.RaceID
+        LEFT JOIN CoastPoolResolved cp
+            ON cp.RiderID = sm.RiderID
+           AND cp.[Year] = rt.[Year]
+        WHERE rt.SportID = 1
+          AND sm.[Start] IS NOT NULL
+
+        UNION ALL
+
+        SELECT
+            rt.[Year],
+            tc.ClassID,
+            tc.RiderID,
+            COALESCE(tc.RiderCoastID, cp.RiderCoastID) AS RiderCoastID,
+            tc.[Start]
+        FROM TC_MAINS tc
+        JOIN Race_Table rt
+            ON rt.RaceID = tc.RaceID
+        LEFT JOIN CoastPoolResolved cp
+            ON cp.RiderID = tc.RiderID
+           AND cp.[Year] = rt.[Year]
+        WHERE rt.SportID = 1
+          AND tc.[Start] IS NOT NULL
+    ) starts_union
+    GROUP BY
+        starts_union.[Year],
+        starts_union.ClassID,
+        starts_union.RiderID,
+        starts_union.RiderCoastID
+),
 BrandAgg AS (
     SELECT
         rt.[Year],
@@ -579,11 +625,19 @@ SELECT
     ms.AvgFinish,
     COALESCE(ms.MainsMade, 0) AS MainsMade,
     COALESCE(ms.Holeshots, 0) AS Holeshots,
-    ms.AvgStartPosition,
+    COALESCE(ssa.AvgStartPosition, ms.AvgStartPosition) AS AvgStartPosition,
     ba.Brand
 FROM MainStats ms
 LEFT JOIN Rider_List rl
     ON rl.RiderID = ms.RiderID
+LEFT JOIN SeasonStartAgg ssa
+    ON ssa.[Year] = ms.[Year]
+   AND ssa.ClassID = ms.ClassID
+   AND ssa.RiderID = ms.RiderID
+   AND (
+        (ssa.RiderCoastID = ms.RiderCoastID)
+        OR (ssa.RiderCoastID IS NULL AND ms.RiderCoastID IS NULL)
+   )
 LEFT JOIN BrandAgg ba
     ON ba.[Year] = ms.[Year]
    AND ba.SportID = ms.SportID

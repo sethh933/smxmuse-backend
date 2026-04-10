@@ -10,33 +10,99 @@ router = APIRouter()
 
 def _get_sx_season_main_stats_from_summary(year: int, classid: int, ridercoastid: int = None):
     query = """
+        WITH CoastPoolResolved AS (
+            SELECT
+                RiderID,
+                [Year],
+                MIN(RiderCoastID) AS RiderCoastID
+            FROM CoastPool
+            GROUP BY RiderID, [Year]
+        ),
+        SeasonStartAgg AS (
+            SELECT
+                starts_union.[Year],
+                starts_union.ClassID,
+                starts_union.RiderID,
+                starts_union.RiderCoastID,
+                CAST(ROUND(AVG(CAST(starts_union.[Start] AS DECIMAL(10,2))), 2) AS DECIMAL(10,2)) AS AvgStartPosition
+            FROM (
+                SELECT
+                    rt.[Year],
+                    sm.ClassID,
+                    sm.RiderID,
+                    COALESCE(sm.RiderCoastID, cp.RiderCoastID) AS RiderCoastID,
+                    sm.[Start]
+                FROM SX_MAINS sm
+                JOIN Race_Table rt
+                    ON rt.RaceID = sm.RaceID
+                LEFT JOIN CoastPoolResolved cp
+                    ON cp.RiderID = sm.RiderID
+                   AND cp.[Year] = rt.[Year]
+                WHERE rt.[Year] = :year
+                  AND rt.SportID = 1
+                  AND sm.ClassID = :classid
+                  AND sm.[Start] IS NOT NULL
+
+                UNION ALL
+
+                SELECT
+                    rt.[Year],
+                    tc.ClassID,
+                    tc.RiderID,
+                    COALESCE(tc.RiderCoastID, cp.RiderCoastID) AS RiderCoastID,
+                    tc.[Start]
+                FROM TC_MAINS tc
+                JOIN Race_Table rt
+                    ON rt.RaceID = tc.RaceID
+                LEFT JOIN CoastPoolResolved cp
+                    ON cp.RiderID = tc.RiderID
+                   AND cp.[Year] = rt.[Year]
+                WHERE rt.[Year] = :year
+                  AND rt.SportID = 1
+                  AND tc.ClassID = :classid
+                  AND tc.[Start] IS NOT NULL
+            ) starts_union
+            GROUP BY
+                starts_union.[Year],
+                starts_union.ClassID,
+                starts_union.RiderID,
+                starts_union.RiderCoastID
+        )
         SELECT
-            [Year],
-            SportID,
-            ClassID,
-            RiderID,
-            FullName,
-            DisplayFullName,
-            RiderCoastID,
-            Points,
-            Wins,
-            Podiums,
-            Top5s,
-            Top10s,
-            BestFinish,
-            AvgFinish,
-            MainsMade,
-            Holeshots,
-            AvgStartPosition,
-            Brand
-        FROM dbo.SeasonSXMainStatsSummary
-        WHERE [Year] = :year
-          AND SportID = 1
-          AND ClassID = :classid
+            s.[Year],
+            s.SportID,
+            s.ClassID,
+            s.RiderID,
+            s.FullName,
+            s.DisplayFullName,
+            s.RiderCoastID,
+            s.Points,
+            s.Wins,
+            s.Podiums,
+            s.Top5s,
+            s.Top10s,
+            s.BestFinish,
+            s.AvgFinish,
+            s.MainsMade,
+            s.Holeshots,
+            COALESCE(ssa.AvgStartPosition, s.AvgStartPosition) AS AvgStartPosition,
+            s.Brand
+        FROM dbo.SeasonSXMainStatsSummary s
+        LEFT JOIN SeasonStartAgg ssa
+            ON ssa.[Year] = s.[Year]
+           AND ssa.ClassID = s.ClassID
+           AND ssa.RiderID = s.RiderID
+           AND (
+                (ssa.RiderCoastID = s.RiderCoastID)
+                OR (ssa.RiderCoastID IS NULL AND s.RiderCoastID IS NULL)
+           )
+        WHERE s.[Year] = :year
+          AND s.SportID = 1
+          AND s.ClassID = :classid
     """
 
     if ridercoastid is not None:
-        query += " AND RiderCoastID = :ridercoastid"
+        query += " AND s.RiderCoastID = :ridercoastid"
 
     query += " ORDER BY Wins DESC, AvgFinish ASC"
 
@@ -170,6 +236,58 @@ def get_season_main_stats(
             ) ranked
             WHERE rn = 1
         ),
+        SeasonStartAgg AS (
+            SELECT
+                starts_union.[Year],
+                starts_union.ClassID,
+                starts_union.RiderID,
+                starts_union.RiderCoastID,
+                CAST(ROUND(AVG(CAST(starts_union.[Start] AS DECIMAL(10,2))), 2) AS DECIMAL(10,2)) AS AvgStartPosition
+            FROM (
+                SELECT
+                    rt.[Year],
+                    sm.ClassID,
+                    sm.RiderID,
+                    COALESCE(sm.RiderCoastID, cp.RiderCoastID) AS RiderCoastID,
+                    sm.[Start]
+                FROM SX_MAINS sm
+                JOIN Race_Table rt
+                    ON rt.RaceID = sm.RaceID
+                LEFT JOIN CoastPoolResolved cp
+                    ON cp.RiderID = sm.RiderID
+                   AND cp.[Year] = rt.[Year]
+                WHERE rt.[Year] = :year
+                  AND rt.SportID = :sportid
+                  AND sm.ClassID = :classid
+                  AND sm.[Start] IS NOT NULL
+                  AND (:ridercoastid IS NULL OR COALESCE(sm.RiderCoastID, cp.RiderCoastID) = :ridercoastid)
+
+                UNION ALL
+
+                SELECT
+                    rt.[Year],
+                    tc.ClassID,
+                    tc.RiderID,
+                    COALESCE(tc.RiderCoastID, cp.RiderCoastID) AS RiderCoastID,
+                    tc.[Start]
+                FROM TC_MAINS tc
+                JOIN Race_Table rt
+                    ON rt.RaceID = tc.RaceID
+                LEFT JOIN CoastPoolResolved cp
+                    ON cp.RiderID = tc.RiderID
+                   AND cp.[Year] = rt.[Year]
+                WHERE rt.[Year] = :year
+                  AND rt.SportID = :sportid
+                  AND tc.ClassID = :classid
+                  AND tc.[Start] IS NOT NULL
+                  AND (:ridercoastid IS NULL OR COALESCE(tc.RiderCoastID, cp.RiderCoastID) = :ridercoastid)
+            ) starts_union
+            GROUP BY
+                starts_union.[Year],
+                starts_union.ClassID,
+                starts_union.RiderID,
+                starts_union.RiderCoastID
+        ),
         BrandAgg AS (
             SELECT
                 rt.Year,
@@ -195,12 +313,35 @@ def get_season_main_stats(
                 COALESCE(sm.RiderCoastID, cp.RiderCoastID)
         )
         SELECT
-            ms.*,
+            ms.[Year],
+            ms.SportID,
+            ms.ClassID,
+            ms.RiderID,
+            ms.FullName,
             COALESCE(rl.FullName, ms.FullName) AS DisplayFullName,
+            ms.RiderCoastID,
+            ms.Points,
+            ms.Wins,
+            ms.Podiums,
+            ms.Top5s,
+            ms.Top10s,
+            ms.BestFinish,
+            ms.AvgFinish,
+            ms.MainsMade,
+            ms.Holeshots,
+            COALESCE(ssa.AvgStartPosition, ms.AvgStartPosition) AS AvgStartPosition,
             ba.Brand
         FROM MainStats ms
         LEFT JOIN Rider_List rl
             ON rl.RiderID = ms.RiderID
+        LEFT JOIN SeasonStartAgg ssa
+            ON ssa.[Year] = ms.[Year]
+           AND ssa.ClassID = ms.ClassID
+           AND ssa.RiderID = ms.RiderID
+           AND (
+                (ssa.RiderCoastID = ms.RiderCoastID)
+                OR (ssa.RiderCoastID IS NULL AND ms.RiderCoastID IS NULL)
+           )
         LEFT JOIN BrandAgg ba
             ON ba.Year = ms.Year
            AND ba.SportID = ms.SportID
