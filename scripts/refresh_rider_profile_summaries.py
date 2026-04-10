@@ -6,6 +6,7 @@ Run this after race imports, or on a scheduled cadence such as Saturday night:
 
 from pathlib import Path
 import sys
+from urllib.request import Request, urlopen
 
 import pyodbc
 
@@ -14,7 +15,7 @@ SQL_PATH = BASE_DIR / "sql" / "refresh_rider_profile_summaries.sql"
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from db import CONN_STR
+from db import CONN_STR, GRID_CACHE_REFRESH_URL
 
 
 def _split_batches(sql_text: str):
@@ -57,5 +58,21 @@ def refresh_rider_profile_summaries():
     print("Rider summary refresh complete.")
 
 
+def post_grid_cache_refresh():
+    if not GRID_CACHE_REFRESH_URL:
+        print("GRID_CACHE_REFRESH_URL not configured; skipping grid cache refresh.")
+        return
+
+    request = Request(GRID_CACHE_REFRESH_URL, method="POST")
+    with urlopen(request, timeout=30) as response:
+        body = response.read().decode("utf-8", errors="replace")
+
+    print(
+        "Grid cache refresh complete "
+        f"(status={getattr(response, 'status', None)}): {body[:500]}"
+    )
+
+
 if __name__ == "__main__":
     refresh_rider_profile_summaries()
+    post_grid_cache_refresh()

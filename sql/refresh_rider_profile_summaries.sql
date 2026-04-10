@@ -381,6 +381,174 @@ TRUNCATE TABLE dbo.SeasonMXOverallSummary;
 TRUNCATE TABLE dbo.SeasonMXMotoQualSummary;
 GO
 
+BEGIN TRANSACTION;
+
+DELETE FROM SX_POINTS_STANDINGS
+WHERE [Year] = YEAR(GETDATE());
+
+WITH SX450_MaxRound AS (
+    SELECT [Year], MAX([Round]) AS MaxRound
+    FROM vw_SX450_RunningStandings
+    GROUP BY [Year]
+),
+BrandDedup AS (
+    SELECT DISTINCT RiderID, [Year], ClassID, SportID, Brand
+    FROM RiderBrandListYear
+)
+INSERT INTO SX_POINTS_STANDINGS (
+    [Year], ClassID, RiderID, FullName,
+    Result, Points, Brand,
+    CoastID, RiderCoastID
+)
+SELECT
+    s.[Year],
+    1,
+    s.RiderID,
+    s.FullName,
+    s.PositionAfterRound,
+    s.TotalPoints,
+    CASE
+        WHEN COUNT(DISTINCT CASE WHEN b.Brand IS NOT NULL THEN b.Brand END) = 1
+            THEN MAX(b.Brand)
+        ELSE STRING_AGG(CASE WHEN b.Brand IS NOT NULL THEN b.Brand END, ', ')
+    END,
+    NULL,
+    NULL
+FROM vw_SX450_RunningStandings s
+JOIN SX450_MaxRound mr
+    ON s.[Year] = mr.[Year]
+   AND s.[Round] = mr.MaxRound
+LEFT JOIN BrandDedup b
+    ON b.RiderID = s.RiderID
+   AND b.[Year] = s.[Year]
+   AND b.ClassID = 1
+   AND b.SportID = 1
+WHERE s.[Year] = YEAR(GETDATE())
+GROUP BY
+    s.[Year],
+    s.RiderID,
+    s.FullName,
+    s.PositionAfterRound,
+    s.TotalPoints;
+
+WITH SX250_MaxRound AS (
+    SELECT
+        [Year],
+        RiderCoastID,
+        MAX(CoastRound) AS MaxRound
+    FROM vw_SX250_RunningStandings
+    GROUP BY [Year], RiderCoastID
+),
+BrandDedup AS (
+    SELECT DISTINCT RiderID, [Year], ClassID, SportID, Brand
+    FROM RiderBrandListYear
+)
+INSERT INTO SX_POINTS_STANDINGS (
+    [Year], ClassID, RiderID, FullName,
+    Result, Points, Brand,
+    CoastID, RiderCoastID
+)
+SELECT
+    s.[Year],
+    2,
+    s.RiderID,
+    s.FullName,
+    s.PositionAfterRound,
+    s.TotalPoints,
+    CASE
+        WHEN COUNT(DISTINCT CASE WHEN b.Brand IS NOT NULL THEN b.Brand END) = 1
+            THEN MAX(b.Brand)
+        ELSE STRING_AGG(CASE WHEN b.Brand IS NOT NULL THEN b.Brand END, ', ')
+    END,
+    s.RiderCoastID,
+    s.RiderCoastID
+FROM vw_SX250_RunningStandings s
+JOIN SX250_MaxRound mr
+    ON s.[Year] = mr.[Year]
+   AND s.RiderCoastID = mr.RiderCoastID
+   AND s.CoastRound = mr.MaxRound
+LEFT JOIN BrandDedup b
+    ON b.RiderID = s.RiderID
+   AND b.[Year] = s.[Year]
+   AND b.ClassID = 2
+   AND b.SportID = 1
+WHERE s.[Year] = YEAR(GETDATE())
+GROUP BY
+    s.[Year],
+    s.RiderID,
+    s.FullName,
+    s.PositionAfterRound,
+    s.TotalPoints,
+    s.RiderCoastID;
+
+DELETE FROM MX_POINTS_STANDINGS
+WHERE [Year] = YEAR(GETDATE());
+
+WITH MX_MaxRound AS (
+    SELECT
+        [Year],
+        ClassID,
+        MAX(ClassRound) AS MaxRound
+    FROM vw_MX_RunningStandings
+    GROUP BY [Year], ClassID
+),
+MX_Final AS (
+    SELECT
+        m.[Year],
+        m.ClassID,
+        m.RiderID,
+        m.FullName,
+        m.ChampionshipPosition,
+        m.TotalPoints,
+        ROW_NUMBER() OVER (
+            PARTITION BY m.[Year], m.ClassID, m.RiderID
+            ORDER BY m.ChampionshipPosition
+        ) AS rn
+    FROM vw_MX_RunningStandings m
+    JOIN MX_MaxRound mr
+        ON m.[Year] = mr.[Year]
+       AND m.ClassID = mr.ClassID
+       AND m.ClassRound = mr.MaxRound
+),
+BrandDedup AS (
+    SELECT DISTINCT RiderID, [Year], ClassID, SportID, Brand
+    FROM RiderBrandListYear
+)
+INSERT INTO MX_POINTS_STANDINGS (
+    [Year], ClassID, RiderID, FullName,
+    Result, Points, Brand
+)
+SELECT
+    m.[Year],
+    m.ClassID,
+    m.RiderID,
+    m.FullName,
+    m.ChampionshipPosition,
+    m.TotalPoints,
+    CASE
+        WHEN COUNT(DISTINCT CASE WHEN b.Brand IS NOT NULL THEN b.Brand END) = 1
+            THEN MAX(b.Brand)
+        ELSE STRING_AGG(CASE WHEN b.Brand IS NOT NULL THEN b.Brand END, ', ')
+    END
+FROM MX_Final m
+LEFT JOIN BrandDedup b
+    ON b.RiderID = m.RiderID
+   AND b.[Year] = m.[Year]
+   AND b.ClassID = m.ClassID
+   AND b.SportID = 2
+WHERE m.rn = 1
+  AND m.[Year] = YEAR(GETDATE())
+GROUP BY
+    m.[Year],
+    m.ClassID,
+    m.RiderID,
+    m.FullName,
+    m.ChampionshipPosition,
+    m.TotalPoints;
+
+COMMIT;
+GO
+
 INSERT INTO dbo.RiderProfileAvailabilitySummary (RiderID, HasSX, HasMX)
 SELECT
     rl.RiderID,
