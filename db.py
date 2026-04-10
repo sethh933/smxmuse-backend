@@ -211,7 +211,10 @@ def compute_featured_riders():
         return [dict(row._mapping) for row in result]
 
 
-def compute_rider_of_the_day():
+def compute_rider_of_the_day(for_date=None):
+    target_date = for_date or datetime.now(timezone.utc).date()
+    target_date_str = target_date.isoformat()
+
     with engine.connect() as conn:
         row = conn.execute(text("""
             SELECT TOP 1
@@ -223,7 +226,7 @@ def compute_rider_of_the_day():
             WHERE FullName IS NOT NULL
               AND ImageURL IS NOT NULL
               AND LTRIM(RTRIM(ImageURL)) <> ''
-            ORDER BY NEWID()
-        """)).fetchone()
+            ORDER BY CHECKSUM(:target_date, RiderID), RiderID
+        """), {"target_date": target_date_str}).fetchone()
 
         return dict(row._mapping) if row else None
