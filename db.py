@@ -10,14 +10,22 @@ from sqlalchemy import create_engine, text
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env.local")
 
-FRONTEND_ORIGINS = [
+DEFAULT_FRONTEND_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://smxmuse.com",
+    "https://www.smxmuse.com",
+]
+
+configured_frontend_origins = [
     origin.strip()
-    for origin in os.getenv(
-        "FRONTEND_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173,https://smxmuse.com,https://www.smxmuse.com",
-    ).split(",")
+    for origin in os.getenv("FRONTEND_ORIGINS", "").split(",")
     if origin.strip()
 ]
+
+FRONTEND_ORIGINS = list(
+    dict.fromkeys([*DEFAULT_FRONTEND_ORIGINS, *configured_frontend_origins])
+)
 
 ADMIN_REFRESH_TOKEN = os.getenv("ADMIN_REFRESH_TOKEN")
 GRID_CACHE_REFRESH_URL = os.getenv("GRID_CACHE_REFRESH_URL")
