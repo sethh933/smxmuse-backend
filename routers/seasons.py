@@ -67,6 +67,28 @@ def _get_sx_season_main_stats_from_summary(year: int, classid: int, ridercoastid
                 starts_union.ClassID,
                 starts_union.RiderID,
                 starts_union.RiderCoastID
+        ),
+        HoleshotAgg AS (
+            SELECT
+                rt.[Year],
+                sm.ClassID,
+                sm.RiderID,
+                COALESCE(sm.RiderCoastID, cp.RiderCoastID) AS RiderCoastID,
+                SUM(COALESCE(sm.Holeshot, 0)) AS Holeshots
+            FROM SX_MAINS sm
+            JOIN Race_Table rt
+                ON rt.RaceID = sm.RaceID
+            LEFT JOIN CoastPoolResolved cp
+                ON cp.RiderID = sm.RiderID
+               AND cp.[Year] = rt.[Year]
+            WHERE rt.[Year] = :year
+              AND rt.SportID = 1
+              AND sm.ClassID = :classid
+            GROUP BY
+                rt.[Year],
+                sm.ClassID,
+                sm.RiderID,
+                COALESCE(sm.RiderCoastID, cp.RiderCoastID)
         )
         SELECT
             s.[Year],
@@ -84,7 +106,7 @@ def _get_sx_season_main_stats_from_summary(year: int, classid: int, ridercoastid
             s.BestFinish,
             s.AvgFinish,
             s.MainsMade,
-            s.Holeshots,
+            COALESCE(ha.Holeshots, s.Holeshots) AS Holeshots,
             COALESCE(ssa.AvgStartPosition, s.AvgStartPosition) AS AvgStartPosition,
             s.Brand
         FROM dbo.SeasonSXMainStatsSummary s
@@ -95,6 +117,14 @@ def _get_sx_season_main_stats_from_summary(year: int, classid: int, ridercoastid
            AND (
                 (ssa.RiderCoastID = s.RiderCoastID)
                 OR (ssa.RiderCoastID IS NULL AND s.RiderCoastID IS NULL)
+           )
+        LEFT JOIN HoleshotAgg ha
+            ON ha.[Year] = s.[Year]
+           AND ha.ClassID = s.ClassID
+           AND ha.RiderID = s.RiderID
+           AND (
+                (ha.RiderCoastID = s.RiderCoastID)
+                OR (ha.RiderCoastID IS NULL AND s.RiderCoastID IS NULL)
            )
         WHERE s.[Year] = :year
           AND s.SportID = 1
@@ -288,6 +318,29 @@ def get_season_main_stats(
                 starts_union.RiderID,
                 starts_union.RiderCoastID
         ),
+        HoleshotAgg AS (
+            SELECT
+                rt.[Year],
+                sm.ClassID,
+                sm.RiderID,
+                COALESCE(sm.RiderCoastID, cp.RiderCoastID) AS RiderCoastID,
+                SUM(COALESCE(sm.Holeshot, 0)) AS Holeshots
+            FROM SX_MAINS sm
+            JOIN Race_Table rt
+                ON rt.RaceID = sm.RaceID
+            LEFT JOIN CoastPoolResolved cp
+                ON cp.RiderID = sm.RiderID
+               AND cp.[Year] = rt.[Year]
+            WHERE rt.[Year] = :year
+              AND rt.SportID = :sportid
+              AND sm.ClassID = :classid
+              AND (:ridercoastid IS NULL OR COALESCE(sm.RiderCoastID, cp.RiderCoastID) = :ridercoastid)
+            GROUP BY
+                rt.[Year],
+                sm.ClassID,
+                sm.RiderID,
+                COALESCE(sm.RiderCoastID, cp.RiderCoastID)
+        ),
         BrandAgg AS (
             SELECT
                 rt.Year,
@@ -328,7 +381,7 @@ def get_season_main_stats(
             ms.BestFinish,
             ms.AvgFinish,
             ms.MainsMade,
-            ms.Holeshots,
+            COALESCE(ha.Holeshots, ms.Holeshots) AS Holeshots,
             COALESCE(ssa.AvgStartPosition, ms.AvgStartPosition) AS AvgStartPosition,
             ba.Brand
         FROM MainStats ms
@@ -341,6 +394,14 @@ def get_season_main_stats(
            AND (
                 (ssa.RiderCoastID = ms.RiderCoastID)
                 OR (ssa.RiderCoastID IS NULL AND ms.RiderCoastID IS NULL)
+           )
+        LEFT JOIN HoleshotAgg ha
+            ON ha.[Year] = ms.[Year]
+           AND ha.ClassID = ms.ClassID
+           AND ha.RiderID = ms.RiderID
+           AND (
+                (ha.RiderCoastID = ms.RiderCoastID)
+                OR (ha.RiderCoastID IS NULL AND ms.RiderCoastID IS NULL)
            )
         LEFT JOIN BrandAgg ba
             ON ba.Year = ms.Year
