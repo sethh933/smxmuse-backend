@@ -1220,7 +1220,7 @@ sx_year_stats AS (
         CAST(ROUND(100.0 * SUM(CASE WHEN b.Result = 1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS DECIMAL(10,2)) AS WinPct,
         SUM(COALESCE(b.LapsLed, 0)) AS LapsLed,
         ys.AvgStart,
-        SUM(CASE WHEN b.Holeshot = 1 THEN 1 ELSE 0 END) AS Holeshots,
+        SUM(COALESCE(b.Holeshot, 0)) AS Holeshots,
         SUM(COALESCE(b.Points, 0)) AS TotalPoints
     FROM sx_base b
     LEFT JOIN sx_year_starts ys
@@ -1254,7 +1254,7 @@ sx_career_class_stats AS (
         CAST(ROUND(100.0 * SUM(CASE WHEN b.Result = 1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS DECIMAL(10,2)) AS WinPct,
         SUM(COALESCE(b.LapsLed, 0)) AS LapsLed,
         cs.AvgStart,
-        SUM(CASE WHEN b.Holeshot = 1 THEN 1 ELSE 0 END) AS Holeshots,
+        SUM(COALESCE(b.Holeshot, 0)) AS Holeshots,
         SUM(COALESCE(b.Points, 0)) AS TotalPoints
     FROM sx_base b
     LEFT JOIN sx_career_class_starts cs
@@ -1282,7 +1282,7 @@ sx_career_overall_stats AS (
         CAST(ROUND(100.0 * SUM(CASE WHEN b.Result = 1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS DECIMAL(10,2)) AS WinPct,
         SUM(COALESCE(b.LapsLed, 0)) AS LapsLed,
         os.AvgStart,
-        SUM(CASE WHEN b.Holeshot = 1 THEN 1 ELSE 0 END) AS Holeshots,
+        SUM(COALESCE(b.Holeshot, 0)) AS Holeshots,
         SUM(COALESCE(b.Points, 0)) AS TotalPoints
     FROM sx_base b
     LEFT JOIN sx_career_overall_starts os

@@ -412,7 +412,7 @@ def _get_sx_profile_payload(cursor, rider_id: int):
                           )
                     ) s
                 ) AS AvgStart,
-                SUM(CASE WHEN Holeshot = 1 THEN 1 ELSE 0 END) AS Holeshots,
+                SUM(COALESCE(Holeshot, 0)) AS Holeshots,
                 SUM(COALESCE(Points, 0)) AS TotalPoints
             FROM base
             GROUP BY [Year], ClassID, RiderCoastID, Brand
@@ -447,7 +447,7 @@ def _get_sx_profile_payload(cursor, rider_id: int):
                         SELECT t.[Start] FROM TC_MAINS t WHERE t.RiderID = ? AND t.ClassID = base.ClassID
                     ) s
                 ) AS AvgStart,
-                SUM(CASE WHEN Holeshot = 1 THEN 1 ELSE 0 END) AS Holeshots,
+                SUM(COALESCE(Holeshot, 0)) AS Holeshots,
                 SUM(COALESCE(Points, 0)) AS TotalPoints
             FROM base
             GROUP BY ClassID
@@ -477,7 +477,7 @@ def _get_sx_profile_payload(cursor, rider_id: int):
                         SELECT t.[Start] FROM TC_MAINS t WHERE t.RiderID = ?
                     ) s
                 ) AS AvgStart,
-                SUM(CASE WHEN Holeshot = 1 THEN 1 ELSE 0 END) AS Holeshots,
+                SUM(COALESCE(Holeshot, 0)) AS Holeshots,
                 SUM(COALESCE(Points, 0)) AS TotalPoints
             FROM base
         )
