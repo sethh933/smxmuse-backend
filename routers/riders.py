@@ -94,42 +94,137 @@ def _get_sx_profile_payload_from_summary(cursor, rider_id: int):
     try:
         cursor.execute(
             """
+            WITH sx_profile AS (
+                SELECT
+                    RiderID,
+                    [Year],
+                    ClassID,
+                    Class,
+                    Brand,
+                    Starts,
+                    Best,
+                    AvgMainResult,
+                    Top10Count,
+                    Top10Pct,
+                    Top5Count,
+                    Top5Pct,
+                    Podiums,
+                    PodiumPct,
+                    Wins,
+                    WinPct,
+                    LapsLed,
+                    AvgStart,
+                    Holeshots,
+                    TotalPoints
+                FROM RiderProfileSXStatsSummary
+                WHERE RiderID = ?
+            ),
+            sx_year_points AS (
+                SELECT
+                    RiderID,
+                    [Year],
+                    CASE
+                        WHEN ClassID = 1 THEN '450'
+                        WHEN ClassID = 2 AND RiderCoastID = 1 THEN '250W'
+                        WHEN ClassID = 2 AND RiderCoastID = 2 THEN '250E'
+                        WHEN ClassID = 2 THEN '250'
+                        WHEN ClassID = 3 THEN '500'
+                    END AS Class,
+                    MAX(COALESCE(Points, 0)) AS TotalPoints
+                FROM SX_POINTS_STANDINGS
+                WHERE RiderID = ?
+                GROUP BY
+                    RiderID,
+                    [Year],
+                    CASE
+                        WHEN ClassID = 1 THEN '450'
+                        WHEN ClassID = 2 AND RiderCoastID = 1 THEN '250W'
+                        WHEN ClassID = 2 AND RiderCoastID = 2 THEN '250E'
+                        WHEN ClassID = 2 THEN '250'
+                        WHEN ClassID = 3 THEN '500'
+                    END
+            ),
+            sx_career_class_points AS (
+                SELECT
+                    RiderID,
+                    CASE
+                        WHEN ClassID = 1 THEN '450'
+                        WHEN ClassID = 2 THEN '250'
+                        WHEN ClassID = 3 THEN '500'
+                    END AS Class,
+                    SUM(COALESCE(Points, 0)) AS TotalPoints
+                FROM SX_POINTS_STANDINGS
+                WHERE RiderID = ?
+                GROUP BY
+                    RiderID,
+                    CASE
+                        WHEN ClassID = 1 THEN '450'
+                        WHEN ClassID = 2 THEN '250'
+                        WHEN ClassID = 3 THEN '500'
+                    END
+            ),
+            sx_career_overall_points AS (
+                SELECT
+                    RiderID,
+                    SUM(COALESCE(Points, 0)) AS TotalPoints
+                FROM SX_POINTS_STANDINGS
+                WHERE RiderID = ?
+                GROUP BY RiderID
+            )
             SELECT
-                [Year],
-                Class,
-                Brand,
-                Starts,
-                Best,
-                AvgMainResult,
-                Top10Count,
-                Top10Pct,
-                Top5Count,
-                Top5Pct,
-                Podiums,
-                PodiumPct,
-                Wins,
-                WinPct,
-                LapsLed,
-                AvgStart,
-                Holeshots,
-                TotalPoints
-            FROM RiderProfileSXStatsSummary
-            WHERE RiderID = ?
+                p.[Year],
+                p.Class,
+                p.Brand,
+                p.Starts,
+                p.Best,
+                p.AvgMainResult,
+                p.Top10Count,
+                p.Top10Pct,
+                p.Top5Count,
+                p.Top5Pct,
+                p.Podiums,
+                p.PodiumPct,
+                p.Wins,
+                p.WinPct,
+                p.LapsLed,
+                p.AvgStart,
+                p.Holeshots,
+                COALESCE(
+                    CASE
+                        WHEN p.[Year] IS NOT NULL THEN yp.TotalPoints
+                        WHEN p.ClassID = 0 THEN op.TotalPoints
+                        ELSE cp.TotalPoints
+                    END,
+                    p.TotalPoints
+                ) AS TotalPoints
+            FROM sx_profile p
+            LEFT JOIN sx_year_points yp
+                ON yp.RiderID = p.RiderID
+               AND yp.[Year] = p.[Year]
+               AND yp.Class = p.Class
+            LEFT JOIN sx_career_class_points cp
+                ON cp.RiderID = p.RiderID
+               AND cp.Class = p.Class
+            LEFT JOIN sx_career_overall_points op
+                ON op.RiderID = p.RiderID
             ORDER BY
-                CASE WHEN [Year] IS NULL THEN 1 ELSE 0 END,
-                [Year],
+                CASE WHEN p.[Year] IS NULL THEN 1 ELSE 0 END,
+                p.[Year],
                 CASE
-                    WHEN [Year] IS NULL THEN
+                    WHEN p.[Year] IS NULL THEN
                         CASE
-                            WHEN ClassID = 2 THEN 1
-                            WHEN ClassID = 1 THEN 2
-                            WHEN ClassID = 0 THEN 3
+                            WHEN p.ClassID = 2 THEN 1
+                            WHEN p.ClassID = 1 THEN 2
+                            WHEN p.ClassID = 0 THEN 3
                             ELSE 9
                         END
-                    ELSE ClassID
+                    ELSE p.ClassID
                 END,
-                Brand
+                p.Brand
             """,
+            rider_id,
+            rider_id,
+            rider_id,
             rider_id,
         )
         columns = [col[0] for col in cursor.description]
@@ -365,6 +460,34 @@ def _get_sx_profile_payload(cursor, rider_id: int):
                AND cp.[Year] = r.[Year]
             WHERE m.RiderID = ?
         ),
+        sx_year_points AS (
+            SELECT
+                s.RiderID,
+                s.[Year],
+                s.ClassID,
+                s.RiderCoastID,
+                MAX(COALESCE(s.Points, 0)) AS TotalPoints
+            FROM SX_POINTS_STANDINGS s
+            WHERE s.RiderID = ?
+            GROUP BY s.RiderID, s.[Year], s.ClassID, s.RiderCoastID
+        ),
+        sx_career_class_points AS (
+            SELECT
+                s.RiderID,
+                s.ClassID,
+                SUM(COALESCE(s.Points, 0)) AS TotalPoints
+            FROM SX_POINTS_STANDINGS s
+            WHERE s.RiderID = ?
+            GROUP BY s.RiderID, s.ClassID
+        ),
+        sx_career_overall_points AS (
+            SELECT
+                s.RiderID,
+                SUM(COALESCE(s.Points, 0)) AS TotalPoints
+            FROM SX_POINTS_STANDINGS s
+            WHERE s.RiderID = ?
+            GROUP BY s.RiderID
+        ),
         year_stats AS (
             SELECT
                 [Year],
@@ -418,9 +541,17 @@ def _get_sx_profile_payload(cursor, rider_id: int):
                     ) s
                 ) AS AvgStart,
                 SUM(COALESCE(Holeshot, 0)) AS Holeshots,
-                SUM(COALESCE(Points, 0)) AS TotalPoints
+                COALESCE(yp.TotalPoints, SUM(COALESCE(Points, 0))) AS TotalPoints
             FROM base
-            GROUP BY [Year], ClassID, RiderCoastID, Brand
+            LEFT JOIN sx_year_points yp
+                ON yp.RiderID = ?
+               AND yp.[Year] = base.[Year]
+               AND yp.ClassID = base.ClassID
+               AND (
+                    (yp.RiderCoastID = base.RiderCoastID)
+                    OR (yp.RiderCoastID IS NULL AND base.RiderCoastID IS NULL)
+               )
+            GROUP BY [Year], ClassID, RiderCoastID, Brand, yp.TotalPoints
         ),
         career_stats AS (
             SELECT
@@ -453,9 +584,12 @@ def _get_sx_profile_payload(cursor, rider_id: int):
                     ) s
                 ) AS AvgStart,
                 SUM(COALESCE(Holeshot, 0)) AS Holeshots,
-                SUM(COALESCE(Points, 0)) AS TotalPoints
+                COALESCE(cp.TotalPoints, SUM(COALESCE(Points, 0))) AS TotalPoints
             FROM base
-            GROUP BY ClassID
+            LEFT JOIN sx_career_class_points cp
+                ON cp.RiderID = ?
+               AND cp.ClassID = base.ClassID
+            GROUP BY ClassID, cp.TotalPoints
             UNION ALL
             SELECT
                 NULL AS [Year],
@@ -483,8 +617,11 @@ def _get_sx_profile_payload(cursor, rider_id: int):
                     ) s
                 ) AS AvgStart,
                 SUM(COALESCE(Holeshot, 0)) AS Holeshots,
-                SUM(COALESCE(Points, 0)) AS TotalPoints
+                COALESCE(op.TotalPoints, SUM(COALESCE(Points, 0))) AS TotalPoints
             FROM base
+            LEFT JOIN sx_career_overall_points op
+                ON op.RiderID = ?
+            GROUP BY op.TotalPoints
         )
         SELECT *
         FROM (
@@ -507,6 +644,12 @@ def _get_sx_profile_payload(cursor, rider_id: int):
             END,
             Brand;
         """,
+        rider_id,
+        rider_id,
+        rider_id,
+        rider_id,
+        rider_id,
+        rider_id,
         rider_id,
         rider_id,
         rider_id,

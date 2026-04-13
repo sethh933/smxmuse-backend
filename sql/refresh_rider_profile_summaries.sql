@@ -1136,6 +1136,31 @@ WITH sx_base AS (
         ON cp.RiderID = m.RiderID
        AND cp.[Year] = r.[Year]
 ),
+sx_year_points AS (
+    SELECT
+        s.RiderID,
+        s.[Year],
+        s.ClassID,
+        s.RiderCoastID,
+        MAX(COALESCE(s.Points, 0)) AS TotalPoints
+    FROM SX_POINTS_STANDINGS s
+    GROUP BY s.RiderID, s.[Year], s.ClassID, s.RiderCoastID
+),
+sx_career_class_points AS (
+    SELECT
+        s.RiderID,
+        s.ClassID,
+        SUM(COALESCE(s.Points, 0)) AS TotalPoints
+    FROM SX_POINTS_STANDINGS s
+    GROUP BY s.RiderID, s.ClassID
+),
+sx_career_overall_points AS (
+    SELECT
+        s.RiderID,
+        SUM(COALESCE(s.Points, 0)) AS TotalPoints
+    FROM SX_POINTS_STANDINGS s
+    GROUP BY s.RiderID
+),
 sx_year_starts AS (
     SELECT
         RiderID,
@@ -1221,14 +1246,19 @@ sx_year_stats AS (
         SUM(COALESCE(b.LapsLed, 0)) AS LapsLed,
         ys.AvgStart,
         SUM(COALESCE(b.Holeshot, 0)) AS Holeshots,
-        SUM(COALESCE(b.Points, 0)) AS TotalPoints
+        COALESCE(yp.TotalPoints, SUM(COALESCE(b.Points, 0))) AS TotalPoints
     FROM sx_base b
     LEFT JOIN sx_year_starts ys
         ON ys.RiderID = b.RiderID
        AND ys.[Year] = b.[Year]
        AND ys.ClassID = b.ClassID
        AND ((ys.RiderCoastID = b.RiderCoastID) OR (ys.RiderCoastID IS NULL AND b.RiderCoastID IS NULL))
-    GROUP BY b.RiderID, b.[Year], b.ClassID, b.RiderCoastID, b.Brand, ys.AvgStart
+    LEFT JOIN sx_year_points yp
+        ON yp.RiderID = b.RiderID
+       AND yp.[Year] = b.[Year]
+       AND yp.ClassID = b.ClassID
+       AND ((yp.RiderCoastID = b.RiderCoastID) OR (yp.RiderCoastID IS NULL AND b.RiderCoastID IS NULL))
+    GROUP BY b.RiderID, b.[Year], b.ClassID, b.RiderCoastID, b.Brand, ys.AvgStart, yp.TotalPoints
 ),
 sx_career_class_stats AS (
     SELECT
@@ -1255,12 +1285,15 @@ sx_career_class_stats AS (
         SUM(COALESCE(b.LapsLed, 0)) AS LapsLed,
         cs.AvgStart,
         SUM(COALESCE(b.Holeshot, 0)) AS Holeshots,
-        SUM(COALESCE(b.Points, 0)) AS TotalPoints
+        COALESCE(cp.TotalPoints, SUM(COALESCE(b.Points, 0))) AS TotalPoints
     FROM sx_base b
     LEFT JOIN sx_career_class_starts cs
         ON cs.RiderID = b.RiderID
        AND cs.ClassID = b.ClassID
-    GROUP BY b.RiderID, b.ClassID, cs.AvgStart
+    LEFT JOIN sx_career_class_points cp
+        ON cp.RiderID = b.RiderID
+       AND cp.ClassID = b.ClassID
+    GROUP BY b.RiderID, b.ClassID, cs.AvgStart, cp.TotalPoints
 ),
 sx_career_overall_stats AS (
     SELECT
@@ -1283,11 +1316,13 @@ sx_career_overall_stats AS (
         SUM(COALESCE(b.LapsLed, 0)) AS LapsLed,
         os.AvgStart,
         SUM(COALESCE(b.Holeshot, 0)) AS Holeshots,
-        SUM(COALESCE(b.Points, 0)) AS TotalPoints
+        COALESCE(op.TotalPoints, SUM(COALESCE(b.Points, 0))) AS TotalPoints
     FROM sx_base b
     LEFT JOIN sx_career_overall_starts os
         ON os.RiderID = b.RiderID
-    GROUP BY b.RiderID, os.AvgStart
+    LEFT JOIN sx_career_overall_points op
+        ON op.RiderID = b.RiderID
+    GROUP BY b.RiderID, os.AvgStart, op.TotalPoints
 )
 INSERT INTO dbo.RiderProfileSXStatsSummary (
     RiderID, [Year], ClassID, Class, Brand, Starts, Best, AvgMainResult,
