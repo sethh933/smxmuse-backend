@@ -283,20 +283,25 @@ def _get_rider_race_results_from_summary(cursor, rider_id: int):
         cursor.execute(
             """
             SELECT
-                Result,
-                RaceID,
-                TrackID,
-                TrackName,
-                RaceDate,
-                Class,
-                Brand,
-                QualResult,
-                HeatResult,
-                LCQResult,
-                Discipline
-            FROM RiderRaceResultsSummary
-            WHERE RiderID = ?
-            ORDER BY RaceDate DESC, RaceID DESC
+                rrs.Result,
+                rrs.RaceID,
+                rrs.TrackID,
+                rrs.TrackName,
+                rrs.RaceDate,
+                tt.City,
+                rrs.Class,
+                rrs.Brand,
+                rrs.QualResult,
+                rrs.HeatResult,
+                rrs.LCQResult,
+                rrs.Discipline
+            FROM RiderRaceResultsSummary rrs
+            LEFT JOIN Race_Table rt
+                ON rt.RaceID = rrs.RaceID
+            LEFT JOIN TrackTable tt
+                ON tt.TrackID = rt.TrackID
+            WHERE rrs.RiderID = ?
+            ORDER BY rrs.RaceDate DESC, rrs.RaceID DESC
             """,
             rider_id,
         )
@@ -1445,6 +1450,7 @@ SXResults AS (
         rt.TrackID,
         rt.TrackName,
         rt.RaceDate,
+        tt.City,
         CASE 
             WHEN rc.ClassID = 1 THEN '450SX'
             WHEN rc.ClassID = 2 THEN '250SX'
@@ -1457,6 +1463,7 @@ SXResults AS (
         'SX' AS Discipline
     FROM RiderRaceClasses rc
     JOIN Race_Table rt ON rt.RaceID = rc.RaceID
+    LEFT JOIN TrackTable tt ON tt.TrackID = rt.TrackID
     LEFT JOIN MainResults m 
         ON m.RaceID = rc.RaceID
        AND m.ClassID = rc.ClassID
@@ -1488,6 +1495,7 @@ MXResults AS (
         rt.TrackID,
         rt.TrackName,
         rt.RaceDate,
+        tt.City,
         CASE 
             WHEN COALESCE(mo.ClassID, mq.ClassID, mc.ClassID) = 1 THEN '450MX'
             WHEN COALESCE(mo.ClassID, mq.ClassID, mc.ClassID) = 2 THEN '250MX'
@@ -1501,6 +1509,7 @@ MXResults AS (
         'MX' AS Discipline
     FROM MX_RiderRaces rr
     JOIN Race_Table rt ON rt.RaceID = rr.RaceID
+    LEFT JOIN TrackTable tt ON tt.TrackID = rt.TrackID
     LEFT JOIN MX_OVERALLS mo
         ON mo.RaceID = rr.RaceID
         AND mo.RiderID = @RiderID

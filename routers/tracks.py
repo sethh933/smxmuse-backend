@@ -38,12 +38,15 @@ def get_track_profile(track_id: int, sport_id: int, class_id: int):
             rt.TrackName,
             rt.RaceID,
             rt.RaceDate,
+            tt.City,
             fm.RiderID,
             fm.FullName AS Winner,
             fm.Brand
         FROM #FilteredMains fm
         JOIN Race_Table rt
             ON rt.RaceID = fm.RaceID
+        LEFT JOIN TrackTable tt
+            ON tt.TrackID = rt.TrackID
         WHERE fm.Result = 1
         ORDER BY rt.RaceDate DESC, rt.RaceID DESC;
 
@@ -102,12 +105,15 @@ def get_track_profile(track_id: int, sport_id: int, class_id: int):
             rt.TrackName,
             rt.RaceID,
             rt.RaceDate,
+            tt.City,
             fm.RiderID,
             fm.FullName AS Winner,
             fm.Brand
         FROM #FilteredMains fm
         JOIN Race_Table rt
             ON rt.RaceID = fm.RaceID
+        LEFT JOIN TrackTable tt
+            ON tt.TrackID = rt.TrackID
         WHERE fm.Result = 1
         ORDER BY rt.RaceDate DESC, rt.RaceID DESC;
 
