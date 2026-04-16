@@ -593,26 +593,51 @@ def get_season_laps_led(
                 sm.ClassID,
                 sm.RiderID,
                 COALESCE(sm.RiderCoastID, cp.RiderCoastID)
+        ),
+        FilteredLapStats AS (
+            SELECT
+                ls.Year,
+                ls.SportID,
+                ls.ClassID,
+                ls.RiderID,
+                ls.FullName,
+                ls.RiderCoastID,
+                ls.LapsLed,
+                ba.Brand
+            FROM LapStats ls
+            LEFT JOIN BrandAgg ba
+                ON ba.Year = ls.Year
+               AND ba.SportID = ls.SportID
+               AND ba.ClassID = ls.ClassID
+               AND ba.RiderID = ls.RiderID
+               AND (
+                    (ba.RiderCoastID = ls.RiderCoastID)
+                    OR (ba.RiderCoastID IS NULL AND ls.RiderCoastID IS NULL)
+               )
+            WHERE :ridercoastid IS NULL OR ls.RiderCoastID = :ridercoastid
+        ),
+        TotalLaps AS (
+            SELECT SUM(LapsLed) AS Total
+            FROM FilteredLapStats
         )
         SELECT
-            ls.*,
-            ba.Brand
-        FROM LapStats ls
-        LEFT JOIN BrandAgg ba
-            ON ba.Year = ls.Year
-           AND ba.SportID = ls.SportID
-           AND ba.ClassID = ls.ClassID
-           AND ba.RiderID = ls.RiderID
-           AND (
-                (ba.RiderCoastID = ls.RiderCoastID)
-                OR (ba.RiderCoastID IS NULL AND ls.RiderCoastID IS NULL)
-           )
+            fls.Year,
+            fls.SportID,
+            fls.ClassID,
+            fls.RiderID,
+            fls.FullName,
+            fls.RiderCoastID,
+            fls.LapsLed,
+            CASE
+                WHEN COALESCE(t.Total, 0) = 0 THEN 0
+                ELSE fls.LapsLed * 1.0 / t.Total
+            END AS PctLapsLed,
+            fls.Brand
+        FROM FilteredLapStats fls
+        CROSS JOIN TotalLaps t
     """
 
-    if ridercoastid is not None:
-        query += " WHERE ls.RiderCoastID = :ridercoastid"
-
-    query += " ORDER BY ls.LapsLed DESC"
+    query += " ORDER BY fls.LapsLed DESC"
 
     return fetch_all(query, locals())
 
