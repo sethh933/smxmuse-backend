@@ -212,11 +212,14 @@ def get_race_header(raceid: int):
         rt.Round,
         rt.Year,
         rt.TrackName,
+        tt.City,
         rt.SportID,
         rt.CoastID,
         rt.TripleCrownID,
         maxRounds.MaxRound
     FROM Race_Table rt
+    LEFT JOIN TrackTable tt
+      ON tt.TrackID = rt.TrackID
     CROSS APPLY (
         SELECT MAX(Round) AS MaxRound
         FROM Race_Table
