@@ -1,0 +1,26 @@
+IF OBJECT_ID('dbo.ROTD', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.ROTD (
+        ROTDID INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        ROTDDate DATE NOT NULL,
+        RiderID INT NOT NULL,
+        FullName NVARCHAR(255) NULL,
+        Country NVARCHAR(100) NULL,
+        ImageURL NVARCHAR(1000) NULL,
+        SelectedAt DATETIME2(0) NOT NULL
+            CONSTRAINT DF_ROTD_SelectedAt DEFAULT SYSUTCDATETIME()
+    );
+END;
+GO
+
+IF NOT EXISTS (
+    SELECT 1
+    FROM sys.indexes
+    WHERE name = 'UX_ROTD_ROTDDate'
+      AND object_id = OBJECT_ID('dbo.ROTD')
+)
+BEGIN
+    CREATE UNIQUE INDEX UX_ROTD_ROTDDate
+        ON dbo.ROTD (ROTDDate);
+END;
+GO

@@ -84,11 +84,50 @@ RIDER_OF_THE_DAY_CACHE = {
     "data": None
 }
 
+ROTD_TABLE_READY = False
+
 
 def fetch_all(query: str, params: dict):
     with engine.begin() as conn:
         result = conn.execute(text(query), params)
         return [dict(row._mapping) for row in result]
+
+
+def ensure_rotd_table():
+    global ROTD_TABLE_READY
+
+    if ROTD_TABLE_READY:
+        return
+
+    with engine.begin() as conn:
+        conn.execute(text("""
+            IF OBJECT_ID('dbo.ROTD', 'U') IS NULL
+            BEGIN
+                CREATE TABLE dbo.ROTD (
+                    ROTDID INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+                    ROTDDate DATE NOT NULL,
+                    RiderID INT NOT NULL,
+                    FullName NVARCHAR(255) NULL,
+                    Country NVARCHAR(100) NULL,
+                    ImageURL NVARCHAR(1000) NULL,
+                    SelectedAt DATETIME2(0) NOT NULL
+                        CONSTRAINT DF_ROTD_SelectedAt DEFAULT SYSUTCDATETIME()
+                );
+            END;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM sys.indexes
+                WHERE name = 'UX_ROTD_ROTDDate'
+                  AND object_id = OBJECT_ID('dbo.ROTD')
+            )
+            BEGIN
+                CREATE UNIQUE INDEX UX_ROTD_ROTDDate
+                    ON dbo.ROTD (ROTDDate);
+            END;
+        """))
+
+    ROTD_TABLE_READY = True
 
 
 def compute_featured_riders():
@@ -213,10 +252,23 @@ def compute_featured_riders():
 
 def compute_rider_of_the_day(for_date=None):
     target_date = for_date or datetime.now(timezone.utc).date()
-    target_date_str = target_date.isoformat()
+    ensure_rotd_table()
 
-    with engine.connect() as conn:
-        row = conn.execute(text("""
+    with engine.begin() as conn:
+        existing_row = conn.execute(text("""
+            SELECT TOP 1
+                RiderID,
+                FullName,
+                Country,
+                ImageURL
+            FROM dbo.ROTD
+            WHERE ROTDDate = :target_date
+        """), {"target_date": target_date}).fetchone()
+
+        if existing_row:
+            return dict(existing_row._mapping)
+
+        selected_row = conn.execute(text("""
             SELECT TOP 1
                 RiderID,
                 FullName,
@@ -226,7 +278,35 @@ def compute_rider_of_the_day(for_date=None):
             WHERE FullName IS NOT NULL
               AND ImageURL IS NOT NULL
               AND LTRIM(RTRIM(ImageURL)) <> ''
-            ORDER BY CHECKSUM(:target_date, RiderID), RiderID
-        """), {"target_date": target_date_str}).fetchone()
+            ORDER BY NEWID()
+        """)).fetchone()
 
-        return dict(row._mapping) if row else None
+        if not selected_row:
+            return None
+
+        selected_rider = dict(selected_row._mapping)
+
+        conn.execute(text("""
+            INSERT INTO dbo.ROTD (
+                ROTDDate,
+                RiderID,
+                FullName,
+                Country,
+                ImageURL
+            )
+            VALUES (
+                :target_date,
+                :rider_id,
+                :full_name,
+                :country,
+                :image_url
+            )
+        """), {
+            "target_date": target_date,
+            "rider_id": selected_rider["RiderID"],
+            "full_name": selected_rider["FullName"],
+            "country": selected_rider["Country"],
+            "image_url": selected_rider["ImageURL"],
+        })
+
+        return selected_rider
