@@ -228,7 +228,7 @@ def get_season_main_stats(
     classid: int,
     ridercoastid: int = None
 ):
-    if sportid == 1:
+    if sportid == 1 and not (classid == 2 and ridercoastid is not None):
         summary_results = _get_sx_season_main_stats_from_summary(year, classid, ridercoastid)
         if summary_results:
             return summary_results
@@ -255,7 +255,12 @@ def get_season_main_stats(
                 SELECT
                     msr.*,
                     ROW_NUMBER() OVER (
-                        PARTITION BY msr.RiderID
+                        PARTITION BY
+                            msr.RiderID,
+                            CASE
+                                WHEN :classid = 2 THEN COALESCE(msr.RiderCoastID, -1)
+                                ELSE -1
+                            END
                         ORDER BY
                             CASE WHEN msr.RiderCoastID IS NULL THEN 0 ELSE 1 END,
                             msr.Wins DESC,
@@ -341,6 +346,66 @@ def get_season_main_stats(
                 sm.RiderID,
                 COALESCE(sm.RiderCoastID, cp.RiderCoastID)
         ),
+        MainStartsAgg AS (
+            SELECT
+                mains_union.[Year],
+                mains_union.ClassID,
+                mains_union.RiderID,
+                mains_union.RiderCoastID,
+                COUNT(*) AS MainsMade
+            FROM (
+                SELECT
+                    rt.[Year],
+                    sm.ClassID,
+                    sm.RiderID,
+                    COALESCE(sm.RiderCoastID, cp.RiderCoastID) AS RiderCoastID,
+                    rt.CoastID
+                FROM SX_MAINS sm
+                JOIN Race_Table rt
+                    ON rt.RaceID = sm.RaceID
+                LEFT JOIN CoastPoolResolved cp
+                    ON cp.RiderID = sm.RiderID
+                   AND cp.[Year] = rt.[Year]
+                WHERE rt.[Year] = :year
+                  AND rt.SportID = :sportid
+                  AND sm.ClassID = :classid
+
+                UNION ALL
+
+                SELECT
+                    rt.[Year],
+                    tc.ClassID,
+                    tc.RiderID,
+                    COALESCE(tc.RiderCoastID, cp.RiderCoastID) AS RiderCoastID,
+                    rt.CoastID
+                FROM TC_MAINS tc
+                JOIN Race_Table rt
+                    ON rt.RaceID = tc.RaceID
+                LEFT JOIN CoastPoolResolved cp
+                    ON cp.RiderID = tc.RiderID
+                   AND cp.[Year] = rt.[Year]
+                WHERE rt.[Year] = :year
+                  AND rt.SportID = :sportid
+                  AND tc.ClassID = :classid
+            ) mains_union
+            WHERE :ridercoastid IS NULL
+               OR (
+                    :classid = 2
+                    AND (
+                        mains_union.CoastID = :ridercoastid
+                        OR mains_union.CoastID = 3
+                    )
+               )
+               OR (
+                    :classid <> 2
+                    AND mains_union.RiderCoastID = :ridercoastid
+               )
+            GROUP BY
+                mains_union.[Year],
+                mains_union.ClassID,
+                mains_union.RiderID,
+                mains_union.RiderCoastID
+        ),
         BrandAgg AS (
             SELECT
                 rt.Year,
@@ -380,13 +445,21 @@ def get_season_main_stats(
             ms.Top10s,
             ms.BestFinish,
             ms.AvgFinish,
-            ms.MainsMade,
+            COALESCE(msa.MainsMade, ms.MainsMade) AS MainsMade,
             COALESCE(ha.Holeshots, ms.Holeshots) AS Holeshots,
             COALESCE(ssa.AvgStartPosition, ms.AvgStartPosition) AS AvgStartPosition,
             ba.Brand
         FROM MainStats ms
         LEFT JOIN Rider_List rl
             ON rl.RiderID = ms.RiderID
+        LEFT JOIN MainStartsAgg msa
+            ON msa.[Year] = ms.[Year]
+           AND msa.ClassID = ms.ClassID
+           AND msa.RiderID = ms.RiderID
+           AND (
+                (msa.RiderCoastID = ms.RiderCoastID)
+                OR (msa.RiderCoastID IS NULL AND ms.RiderCoastID IS NULL)
+           )
         LEFT JOIN SeasonStartAgg ssa
             ON ssa.[Year] = ms.[Year]
            AND ssa.ClassID = ms.ClassID

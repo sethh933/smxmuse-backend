@@ -1118,7 +1118,15 @@ GROUP BY
     r.RiderID;
 GO
 
-WITH sx_base AS (
+WITH CoastPoolResolved AS (
+    SELECT
+        RiderID,
+        [Year],
+        MIN(RiderCoastID) AS RiderCoastID
+    FROM CoastPool
+    GROUP BY RiderID, [Year]
+),
+sx_base AS (
     SELECT
         m.RiderID,
         r.[Year],
@@ -1132,7 +1140,7 @@ WITH sx_base AS (
         m.Brand
     FROM SX_MAINS m
     JOIN Race_Table r ON r.RaceID = m.RaceID
-    LEFT JOIN CoastPool cp
+    LEFT JOIN CoastPoolResolved cp
         ON cp.RiderID = m.RiderID
        AND cp.[Year] = r.[Year]
 ),
@@ -1181,7 +1189,7 @@ sx_year_starts AS (
             t.[Start]
         FROM TC_MAINS t
         JOIN Race_Table r ON r.RaceID = t.RaceID
-        LEFT JOIN CoastPool cp
+        LEFT JOIN CoastPoolResolved cp
             ON cp.RiderID = t.RiderID
            AND cp.[Year] = r.[Year]
         WHERE t.[Start] IS NOT NULL
@@ -1336,7 +1344,15 @@ UNION ALL
 SELECT * FROM sx_career_overall_stats;
 GO
 
-WITH sx_sessions AS (
+WITH CoastPoolResolved AS (
+    SELECT
+        RiderID,
+        [Year],
+        MIN(RiderCoastID) AS RiderCoastID
+    FROM CoastPool
+    GROUP BY RiderID, [Year]
+),
+sx_sessions AS (
     SELECT
         q.RiderID,
         r.[Year],
@@ -1348,7 +1364,7 @@ WITH sx_sessions AS (
         CAST(NULL AS INT) AS IsLcqTransfer
     FROM SX_QUAL q
     JOIN Race_Table r ON r.RaceID = q.RaceID
-    LEFT JOIN CoastPool cp ON cp.RiderID = q.RiderID AND cp.[Year] = r.[Year]
+    LEFT JOIN CoastPoolResolved cp ON cp.RiderID = q.RiderID AND cp.[Year] = r.[Year]
     UNION ALL
     SELECT
         h.RiderID,
@@ -1361,7 +1377,7 @@ WITH sx_sessions AS (
         CAST(NULL AS INT)
     FROM SX_HEATS h
     JOIN Race_Table r ON r.RaceID = h.RaceID
-    LEFT JOIN CoastPool cp ON cp.RiderID = h.RiderID AND cp.[Year] = r.[Year]
+    LEFT JOIN CoastPoolResolved cp ON cp.RiderID = h.RiderID AND cp.[Year] = r.[Year]
     UNION ALL
     SELECT
         l.RiderID,
@@ -1374,7 +1390,7 @@ WITH sx_sessions AS (
         CASE WHEN m.RiderID IS NULL THEN 0 ELSE 1 END
     FROM SX_LCQS l
     JOIN Race_Table r ON r.RaceID = l.RaceID
-    LEFT JOIN CoastPool cp ON cp.RiderID = l.RiderID AND cp.[Year] = r.[Year]
+    LEFT JOIN CoastPoolResolved cp ON cp.RiderID = l.RiderID AND cp.[Year] = r.[Year]
     LEFT JOIN (
         SELECT DISTINCT RaceID, ClassID, RiderID
         FROM SX_MAINS

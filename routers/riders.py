@@ -441,7 +441,15 @@ def _get_rider_points_from_summary(cursor, rider_id: int):
 def _get_sx_profile_payload(cursor, rider_id: int):
     cursor.execute(
         """
-        WITH base AS (
+        WITH CoastPoolResolved AS (
+            SELECT
+                RiderID,
+                [Year],
+                MIN(RiderCoastID) AS RiderCoastID
+            FROM CoastPool
+            GROUP BY RiderID, [Year]
+        ),
+        base AS (
             SELECT
                 r.[Year],
                 m.ClassID,
@@ -455,7 +463,7 @@ def _get_sx_profile_payload(cursor, rider_id: int):
             FROM SX_MAINS m
             JOIN Race_Table r
                 ON r.RaceID = m.RaceID
-            LEFT JOIN CoastPool cp
+            LEFT JOIN CoastPoolResolved cp
                 ON cp.RiderID = m.RiderID
                AND cp.[Year] = r.[Year]
             WHERE m.RiderID = ?
@@ -518,7 +526,7 @@ def _get_sx_profile_payload(cursor, rider_id: int):
                         SELECT m.[Start]
                         FROM SX_MAINS m
                         JOIN Race_Table r2 ON r2.RaceID = m.RaceID
-                        LEFT JOIN CoastPool cp2 ON cp2.RiderID = m.RiderID AND cp2.[Year] = r2.[Year]
+                        LEFT JOIN CoastPoolResolved cp2 ON cp2.RiderID = m.RiderID AND cp2.[Year] = r2.[Year]
                         WHERE m.RiderID = ?
                           AND m.ClassID = base.ClassID
                           AND r2.[Year] = base.[Year]
@@ -530,7 +538,7 @@ def _get_sx_profile_payload(cursor, rider_id: int):
                         SELECT t.[Start]
                         FROM TC_MAINS t
                         JOIN Race_Table r3 ON r3.RaceID = t.RaceID
-                        LEFT JOIN CoastPool cp3 ON cp3.RiderID = t.RiderID AND cp3.[Year] = r3.[Year]
+                        LEFT JOIN CoastPoolResolved cp3 ON cp3.RiderID = t.RiderID AND cp3.[Year] = r3.[Year]
                         WHERE t.RiderID = ?
                           AND t.ClassID = base.ClassID
                           AND r3.[Year] = base.[Year]
@@ -663,7 +671,15 @@ def _get_sx_profile_payload(cursor, rider_id: int):
 
     cursor.execute(
         """
-        WITH base AS (
+        WITH CoastPoolResolved AS (
+            SELECT
+                RiderID,
+                [Year],
+                MIN(RiderCoastID) AS RiderCoastID
+            FROM CoastPool
+            GROUP BY RiderID, [Year]
+        ),
+        base AS (
             SELECT
                 r.[Year],
                 q.ClassID,
@@ -674,7 +690,7 @@ def _get_sx_profile_payload(cursor, rider_id: int):
                 CAST(NULL AS INT) AS IsLcqTransfer
             FROM SX_QUAL q
             JOIN Race_Table r ON r.RaceID = q.RaceID
-            LEFT JOIN CoastPool cp ON cp.RiderID = q.RiderID AND cp.[Year] = r.[Year]
+            LEFT JOIN CoastPoolResolved cp ON cp.RiderID = q.RiderID AND cp.[Year] = r.[Year]
             WHERE q.RiderID = ?
             UNION ALL
             SELECT
@@ -687,7 +703,7 @@ def _get_sx_profile_payload(cursor, rider_id: int):
                 CAST(NULL AS INT)
             FROM SX_HEATS h
             JOIN Race_Table r ON r.RaceID = h.RaceID
-            LEFT JOIN CoastPool cp ON cp.RiderID = h.RiderID AND cp.[Year] = r.[Year]
+            LEFT JOIN CoastPoolResolved cp ON cp.RiderID = h.RiderID AND cp.[Year] = r.[Year]
             WHERE h.RiderID = ?
             UNION ALL
             SELECT
@@ -709,7 +725,7 @@ def _get_sx_profile_payload(cursor, rider_id: int):
                 END
             FROM SX_LCQS l
             JOIN Race_Table r ON r.RaceID = l.RaceID
-            LEFT JOIN CoastPool cp ON cp.RiderID = l.RiderID AND cp.[Year] = r.[Year]
+            LEFT JOIN CoastPoolResolved cp ON cp.RiderID = l.RiderID AND cp.[Year] = r.[Year]
             WHERE l.RiderID = ?
         ),
         year_stats AS (
