@@ -649,18 +649,114 @@ def get_season_points_progression(
     classid: int,
     ridercoastid: int = None
 ):
+    if sportid == 1:
+        if classid == 1:
+            query = """
+                SELECT
+                    s.[Year] AS Year,
+                    1 AS SportID,
+                    1 AS ClassID,
+                    s.[Round] AS Round,
+                    s.RiderID AS RiderID,
+                    s.FullName AS FullName,
+                    CAST(NULL AS INT) AS RiderCoastID,
+                    s.TotalPoints AS CumulativePoints
+                FROM dbo.vw_SX450_RunningStandings s
+                WHERE s.[Year] = :year
+                ORDER BY s.[Round], s.TotalPoints DESC, s.RiderID
+            """
+            return fetch_all(query, locals())
+
+        if classid == 2:
+            query = """
+                WITH Base AS (
+                    SELECT
+                        rt.[Year] AS Year,
+                        rt.[Round] AS Round,
+                        sm.RiderID,
+                        sm.FullName,
+                        COALESCE(sm.RiderCoastID, cp.RiderCoastID) AS RiderCoastID,
+                        sm.Points AS Points
+                    FROM SX_MAINS sm
+                    JOIN Race_Table rt
+                        ON rt.RaceID = sm.RaceID
+                    LEFT JOIN CoastPool cp
+                        ON cp.RiderID = sm.RiderID
+                       AND cp.[Year] = rt.[Year]
+                    WHERE rt.[Year] = :year
+                      AND rt.SportID = 1
+                      AND sm.ClassID = 2
+                      AND (
+                            :ridercoastid IS NULL
+                            OR rt.CoastID = :ridercoastid
+                            OR rt.CoastID = 3
+                      )
+                ),
+                EligibleRounds AS (
+                    SELECT
+                        Year,
+                        Round
+                    FROM Base
+                    GROUP BY
+                        Year,
+                        Round
+                    HAVING SUM(Points) IS NOT NULL
+                ),
+                RoundPoints AS (
+                    SELECT
+                        b.Year,
+                        b.Round,
+                        b.RiderID,
+                        b.FullName,
+                        b.RiderCoastID,
+                        SUM(COALESCE(b.Points, 0)) AS Points
+                    FROM Base b
+                    JOIN EligibleRounds er
+                        ON er.Year = b.Year
+                       AND er.Round = b.Round
+                    GROUP BY
+                        b.Year,
+                        b.Round,
+                        b.RiderID,
+                        b.FullName,
+                        b.RiderCoastID
+                ),
+                RunningTotals AS (
+                    SELECT
+                        Year,
+                        Round,
+                        RiderID,
+                        FullName,
+                        RiderCoastID,
+                        SUM(Points) OVER (
+                            PARTITION BY RiderID
+                            ORDER BY Round
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                        ) AS CumulativePoints
+                    FROM RoundPoints
+                )
+                SELECT
+                    Year,
+                    1 AS SportID,
+                    2 AS ClassID,
+                    Round,
+                    RiderID,
+                    FullName,
+                    RiderCoastID,
+                    CumulativePoints
+                FROM RunningTotals
+                ORDER BY Round, CumulativePoints DESC, RiderID
+            """
+            return fetch_all(query, locals())
+
     query = """
         SELECT *
         FROM dbo.vw_SeasonPointsProgression
         WHERE Year = :year
           AND SportID = :sportid
           AND ClassID = :classid
+        ORDER BY Round
     """
-
-    if ridercoastid is not None:
-        query += " AND RiderCoastID = :ridercoastid"
-
-    query += " ORDER BY Round"
 
     return fetch_all(query, locals())
 
