@@ -1335,8 +1335,26 @@ def get_featured_riders():
 @router.get("/api/riders/rider-of-the-day")
 def get_rider_of_the_day():
     today_utc = datetime.now(timezone.utc).date()
+    should_refresh = RIDER_OF_THE_DAY_CACHE["date"] != today_utc or RIDER_OF_THE_DAY_CACHE["data"] is None
 
-    if RIDER_OF_THE_DAY_CACHE["date"] != today_utc:
+    if not should_refresh:
+        with engine.connect() as conn:
+            current_row = conn.execute(
+                text(
+                    """
+                    SELECT TOP 1 RiderID
+                    FROM dbo.ROTD
+                    WHERE ROTDDate = :target_date
+                    """
+                ),
+                {"target_date": today_utc},
+            ).fetchone()
+
+        cached_rider_id = RIDER_OF_THE_DAY_CACHE["data"].get("RiderID")
+        db_rider_id = current_row.RiderID if current_row else None
+        should_refresh = db_rider_id != cached_rider_id
+
+    if should_refresh:
         RIDER_OF_THE_DAY_CACHE["data"] = compute_rider_of_the_day()
         RIDER_OF_THE_DAY_CACHE["date"] = today_utc
 
