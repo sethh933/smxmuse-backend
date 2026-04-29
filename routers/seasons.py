@@ -352,10 +352,11 @@ def get_season_main_stats(
                 mains_union.ClassID,
                 mains_union.RiderID,
                 mains_union.RiderCoastID,
-                COUNT(*) AS MainsMade
+                COUNT(DISTINCT mains_union.RaceID) AS MainsMade
             FROM (
                 SELECT
                     rt.[Year],
+                    sm.RaceID,
                     sm.ClassID,
                     sm.RiderID,
                     COALESCE(sm.RiderCoastID, cp.RiderCoastID) AS RiderCoastID,
@@ -374,6 +375,7 @@ def get_season_main_stats(
 
                 SELECT
                     rt.[Year],
+                    tc.RaceID,
                     tc.ClassID,
                     tc.RiderID,
                     COALESCE(tc.RiderCoastID, cp.RiderCoastID) AS RiderCoastID,
@@ -405,6 +407,34 @@ def get_season_main_stats(
                 mains_union.ClassID,
                 mains_union.RiderID,
                 mains_union.RiderCoastID
+        ),
+        MainResultsAgg AS (
+            SELECT
+                rt.[Year],
+                sm.ClassID,
+                sm.RiderID,
+                COALESCE(sm.RiderCoastID, cp.RiderCoastID) AS RiderCoastID,
+                SUM(CASE WHEN sm.Result = 1 THEN 1 ELSE 0 END) AS Wins,
+                SUM(CASE WHEN sm.Result <= 3 THEN 1 ELSE 0 END) AS Podiums,
+                SUM(CASE WHEN sm.Result <= 5 THEN 1 ELSE 0 END) AS Top5s,
+                SUM(CASE WHEN sm.Result <= 10 THEN 1 ELSE 0 END) AS Top10s,
+                MIN(sm.Result) AS BestFinish,
+                CAST(ROUND(AVG(CAST(sm.Result AS DECIMAL(10,2))), 2) AS DECIMAL(10,2)) AS AvgFinish
+            FROM SX_MAINS sm
+            JOIN Race_Table rt
+                ON rt.RaceID = sm.RaceID
+            LEFT JOIN CoastPoolResolved cp
+                ON cp.RiderID = sm.RiderID
+               AND cp.[Year] = rt.[Year]
+            WHERE rt.[Year] = :year
+              AND rt.SportID = :sportid
+              AND sm.ClassID = :classid
+              AND (:ridercoastid IS NULL OR COALESCE(sm.RiderCoastID, cp.RiderCoastID) = :ridercoastid)
+            GROUP BY
+                rt.[Year],
+                sm.ClassID,
+                sm.RiderID,
+                COALESCE(sm.RiderCoastID, cp.RiderCoastID)
         ),
         BrandAgg AS (
             SELECT
@@ -439,12 +469,36 @@ def get_season_main_stats(
             COALESCE(rl.FullName, ms.FullName) AS DisplayFullName,
             ms.RiderCoastID,
             ms.Points,
-            ms.Wins,
-            ms.Podiums,
-            ms.Top5s,
-            ms.Top10s,
-            ms.BestFinish,
-            ms.AvgFinish,
+            CASE
+                WHEN :sportid = 1 AND :classid = 2 AND :ridercoastid IS NOT NULL
+                    THEN COALESCE(mra.Wins, ms.Wins)
+                ELSE ms.Wins
+            END AS Wins,
+            CASE
+                WHEN :sportid = 1 AND :classid = 2 AND :ridercoastid IS NOT NULL
+                    THEN COALESCE(mra.Podiums, ms.Podiums)
+                ELSE ms.Podiums
+            END AS Podiums,
+            CASE
+                WHEN :sportid = 1 AND :classid = 2 AND :ridercoastid IS NOT NULL
+                    THEN COALESCE(mra.Top5s, ms.Top5s)
+                ELSE ms.Top5s
+            END AS Top5s,
+            CASE
+                WHEN :sportid = 1 AND :classid = 2 AND :ridercoastid IS NOT NULL
+                    THEN COALESCE(mra.Top10s, ms.Top10s)
+                ELSE ms.Top10s
+            END AS Top10s,
+            CASE
+                WHEN :sportid = 1 AND :classid = 2 AND :ridercoastid IS NOT NULL
+                    THEN COALESCE(mra.BestFinish, ms.BestFinish)
+                ELSE ms.BestFinish
+            END AS BestFinish,
+            CASE
+                WHEN :sportid = 1 AND :classid = 2 AND :ridercoastid IS NOT NULL
+                    THEN COALESCE(mra.AvgFinish, ms.AvgFinish)
+                ELSE ms.AvgFinish
+            END AS AvgFinish,
             COALESCE(msa.MainsMade, ms.MainsMade) AS MainsMade,
             COALESCE(ha.Holeshots, ms.Holeshots) AS Holeshots,
             COALESCE(ssa.AvgStartPosition, ms.AvgStartPosition) AS AvgStartPosition,
@@ -459,6 +513,14 @@ def get_season_main_stats(
            AND (
                 (msa.RiderCoastID = ms.RiderCoastID)
                 OR (msa.RiderCoastID IS NULL AND ms.RiderCoastID IS NULL)
+           )
+        LEFT JOIN MainResultsAgg mra
+            ON mra.[Year] = ms.[Year]
+           AND mra.ClassID = ms.ClassID
+           AND mra.RiderID = ms.RiderID
+           AND (
+                (mra.RiderCoastID = ms.RiderCoastID)
+                OR (mra.RiderCoastID IS NULL AND ms.RiderCoastID IS NULL)
            )
         LEFT JOIN SeasonStartAgg ssa
             ON ssa.[Year] = ms.[Year]
@@ -742,7 +804,15 @@ def get_season_points_progression(
 
         if classid == 2:
             query = """
-                WITH Base AS (
+                WITH CoastPoolResolved AS (
+                    SELECT
+                        RiderID,
+                        [Year],
+                        MIN(RiderCoastID) AS RiderCoastID
+                    FROM CoastPool
+                    GROUP BY RiderID, [Year]
+                ),
+                Base AS (
                     SELECT
                         rt.[Year] AS Year,
                         rt.[Round] AS Round,
@@ -753,7 +823,7 @@ def get_season_points_progression(
                     FROM SX_MAINS sm
                     JOIN Race_Table rt
                         ON rt.RaceID = sm.RaceID
-                    LEFT JOIN CoastPool cp
+                    LEFT JOIN CoastPoolResolved cp
                         ON cp.RiderID = sm.RiderID
                        AND cp.[Year] = rt.[Year]
                     WHERE rt.[Year] = :year
@@ -802,7 +872,7 @@ def get_season_points_progression(
                         FullName,
                         RiderCoastID,
                         SUM(Points) OVER (
-                            PARTITION BY RiderID
+                            PARTITION BY RiderID, RiderCoastID
                             ORDER BY Round
                             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
                         ) AS CumulativePoints
