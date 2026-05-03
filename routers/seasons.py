@@ -798,6 +798,16 @@ def get_season_points_progression(
                     s.TotalPoints AS CumulativePoints
                 FROM dbo.vw_SX450_RunningStandings s
                 WHERE s.[Year] = :year
+                  AND s.[Round] <= (
+                      SELECT MAX(rt.[Round])
+                      FROM Race_Table rt
+                      JOIN SX_MAINS sm
+                        ON sm.RaceID = rt.RaceID
+                      WHERE rt.[Year] = :year
+                        AND rt.SportID = 1
+                        AND sm.ClassID = 1
+                        AND sm.Result IS NOT NULL
+                  )
                 ORDER BY s.[Round], s.TotalPoints DESC, s.RiderID
             """
             return fetch_all(query, locals())
