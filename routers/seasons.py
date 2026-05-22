@@ -1,5 +1,5 @@
 import pyodbc
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from db import CONN_STR, fetch_all
 from error_utils import raise_http_error
@@ -210,6 +210,56 @@ def _get_mx_season_moto_qual_from_summary(year: int, classid: int):
             AvgQual,
             ConsiWins
         FROM dbo.SeasonMXMotoQualSummary
+        WHERE [Year] = :year
+          AND ClassID = :classid
+        ORDER BY
+            CASE WHEN AvgMoto IS NULL THEN 1 ELSE 0 END,
+            AvgMoto ASC,
+            AvgQual DESC
+    """
+
+    return fetch_all(query, locals())
+
+
+def _get_smx_season_overall_from_summary(year: int, classid: int):
+    query = """
+        SELECT
+            RiderID,
+            FullName,
+            Brand,
+            Starts,
+            Wins,
+            Podiums,
+            Top5,
+            Top10,
+            BestOverall,
+            AvgOverall,
+            Holeshots,
+            AvgStart,
+            Points
+        FROM dbo.SeasonSMXOverallSummary
+        WHERE [Year] = :year
+          AND ClassID = :classid
+        ORDER BY Points DESC, Wins DESC, AvgOverall ASC
+    """
+
+    return fetch_all(query, locals())
+
+
+def _get_smx_season_moto_qual_from_summary(year: int, classid: int):
+    query = """
+        SELECT
+            RiderID,
+            FullName,
+            MotoWins,
+            MotoPodiums,
+            BestMoto,
+            AvgMoto,
+            Poles,
+            QualStarts,
+            AvgQual,
+            ConsiWins
+        FROM dbo.SeasonSMXMotoQualSummary
         WHERE [Year] = :year
           AND ClassID = :classid
         ORDER BY
@@ -1154,6 +1204,224 @@ def get_mx_season_laps_led(year: int, classid: int):
     return fetch_all(query, locals())
 
 
+@router.get("/api/smx/season/overall")
+def get_smx_season_overall(year: int, classid: int):
+    summary_results = _get_smx_season_overall_from_summary(year, classid)
+    if summary_results:
+        return summary_results
+
+    query = """
+    WITH Base AS (
+        SELECT
+            so.RiderID,
+            so.FullName,
+            so.Brand,
+            so.Result,
+            so.Holeshot,
+            so.M1_Start,
+            so.M2_Start,
+            so.Points
+        FROM SMX_OVERALLS so
+        JOIN Race_Table rt
+            ON rt.RaceID = so.RaceID
+        WHERE rt.Year = :year
+          AND rt.SportID = 3
+          AND so.ClassID = :classid
+    ),
+
+    StartsCalc AS (
+        SELECT *,
+            CASE
+                WHEN M1_Start IS NOT NULL AND M2_Start IS NOT NULL
+                    THEN (M1_Start + M2_Start) / 2.0
+                WHEN M1_Start IS NOT NULL THEN M1_Start
+                WHEN M2_Start IS NOT NULL THEN M2_Start
+            END AS AvgStartRace
+        FROM Base
+    )
+
+    SELECT
+        RiderID,
+        FullName,
+        MAX(Brand) AS Brand,
+        COUNT(*) AS Starts,
+        SUM(CASE WHEN Result = 1 THEN 1 ELSE 0 END) AS Wins,
+        SUM(CASE WHEN Result <= 3 THEN 1 ELSE 0 END) AS Podiums,
+        SUM(CASE WHEN Result <= 5 THEN 1 ELSE 0 END) AS Top5,
+        SUM(CASE WHEN Result <= 10 THEN 1 ELSE 0 END) AS Top10,
+        MIN(Result) AS BestOverall,
+        CAST(AVG(CAST(Result AS FLOAT)) AS DECIMAL(10,2)) AS AvgOverall,
+        SUM(COALESCE(Holeshot, 0)) AS Holeshots,
+        CAST(AVG(AvgStartRace) AS DECIMAL(10,2)) AS AvgStart,
+        SUM(COALESCE(Points, 0)) AS Points
+    FROM StartsCalc
+    GROUP BY RiderID, FullName
+    ORDER BY Points DESC, Wins DESC, AvgOverall ASC
+    """
+
+    return fetch_all(query, locals())
+
+
+@router.get("/api/smx/season/moto-qual")
+def get_smx_season_moto_qual(year: int, classid: int):
+    summary_results = _get_smx_season_moto_qual_from_summary(year, classid)
+    if summary_results:
+        return summary_results
+
+    query = """
+    WITH HasQual AS (
+        SELECT COUNT(*) AS Cnt
+        FROM SMX_QUAL sq
+        JOIN Race_Table rt
+            ON rt.RaceID = sq.RaceID
+        WHERE rt.Year = :year
+          AND rt.SportID = 3
+          AND sq.ClassID = :classid
+    ),
+
+    RiderBase AS (
+        SELECT DISTINCT so.RiderID, so.FullName
+        FROM SMX_OVERALLS so
+        JOIN Race_Table rt
+            ON rt.RaceID = so.RaceID
+        WHERE rt.Year = :year
+          AND rt.SportID = 3
+          AND so.ClassID = :classid
+
+        UNION
+
+        SELECT DISTINCT sq.RiderID, sq.FullName
+        FROM SMX_QUAL sq
+        JOIN Race_Table rt
+            ON rt.RaceID = sq.RaceID
+        WHERE rt.Year = :year
+          AND rt.SportID = 3
+          AND sq.ClassID = :classid
+          AND (SELECT Cnt FROM HasQual) > 0
+    ),
+
+    MotoStats AS (
+        SELECT
+            sm.RiderID,
+            MAX(sm.FullName) AS FullName,
+            SUM(CASE WHEN sm.Result = 1 THEN 1 ELSE 0 END) AS MotoWins,
+            SUM(CASE WHEN sm.Result <= 3 THEN 1 ELSE 0 END) AS MotoPodiums,
+            MIN(sm.Result) AS BestMoto,
+            CAST(AVG(CAST(sm.Result AS FLOAT)) AS DECIMAL(10,2)) AS AvgMoto
+        FROM SMX_MOTOS sm
+        JOIN Race_Table rt
+            ON rt.RaceID = sm.RaceID
+        WHERE rt.Year = :year
+          AND rt.SportID = 3
+          AND sm.ClassID = :classid
+        GROUP BY sm.RiderID
+    ),
+
+    QualStats AS (
+        SELECT
+            sq.RiderID,
+            COUNT(*) AS QualStarts,
+            SUM(CASE WHEN sq.Result = 1 THEN 1 ELSE 0 END) AS Poles,
+            CAST(AVG(CAST(sq.Result AS FLOAT)) AS DECIMAL(10,2)) AS AvgQual
+        FROM SMX_QUAL sq
+        JOIN Race_Table rt
+            ON rt.RaceID = sq.RaceID
+        WHERE rt.Year = :year
+          AND rt.SportID = 3
+          AND sq.ClassID = :classid
+        GROUP BY sq.RiderID
+    ),
+
+    WildcardStats AS (
+        SELECT
+            sl.RiderID,
+            SUM(CASE WHEN sl.Result = 1 THEN 1 ELSE 0 END) AS ConsiWins
+        FROM SMX_LCQS sl
+        JOIN Race_Table rt
+            ON rt.RaceID = sl.RaceID
+        WHERE rt.Year = :year
+          AND rt.SportID = 3
+          AND sl.ClassID = :classid
+        GROUP BY sl.RiderID
+    )
+
+    SELECT
+        r.RiderID,
+        r.FullName,
+        ISNULL(m.MotoWins, 0) AS MotoWins,
+        ISNULL(m.MotoPodiums, 0) AS MotoPodiums,
+        m.BestMoto,
+        m.AvgMoto,
+        ISNULL(q.Poles, 0) AS Poles,
+        ISNULL(q.QualStarts, 0) AS QualStarts,
+        ISNULL(q.AvgQual, 0) AS AvgQual,
+        ISNULL(w.ConsiWins, 0) AS ConsiWins
+    FROM RiderBase r
+    LEFT JOIN MotoStats m ON r.RiderID = m.RiderID
+    LEFT JOIN QualStats q ON r.RiderID = q.RiderID
+    LEFT JOIN WildcardStats w ON r.RiderID = w.RiderID
+    ORDER BY
+        CASE WHEN m.AvgMoto IS NULL THEN 1 ELSE 0 END,
+        m.AvgMoto ASC,
+        q.AvgQual DESC
+    """
+
+    return fetch_all(query, locals())
+
+
+@router.get("/api/smx/season/laps-led")
+def get_smx_season_laps_led(year: int, classid: int):
+    query = """
+    WITH RiderLaps AS (
+        SELECT
+            rt.Year,
+            so.ClassID,
+            so.RiderID,
+            so.FullName,
+            MAX(so.Brand) AS Brand,
+            SUM(
+                CASE
+                    WHEN so.LapsLed IS NOT NULL THEN so.LapsLed
+                    ELSE COALESCE(so.M1_Laps_Led, 0) + COALESCE(so.M2_Laps_Led, 0)
+                END
+            ) AS LapsLed
+        FROM SMX_OVERALLS so
+        JOIN Race_Table rt
+            ON rt.RaceID = so.RaceID
+        WHERE rt.Year = :year
+          AND rt.SportID = 3
+          AND so.ClassID = :classid
+        GROUP BY
+            rt.Year,
+            so.ClassID,
+            so.RiderID,
+            so.FullName
+    ),
+
+    TotalLaps AS (
+        SELECT SUM(LapsLed) AS Total FROM RiderLaps
+    )
+
+    SELECT
+        r.Year,
+        3 AS SportID,
+        r.ClassID,
+        r.RiderID,
+        r.FullName,
+        r.Brand,
+        r.LapsLed,
+        CASE
+            WHEN t.Total = 0 THEN 0
+            ELSE r.LapsLed * 1.0 / t.Total
+        END AS PctLapsLed
+    FROM RiderLaps r
+    CROSS JOIN TotalLaps t
+    ORDER BY r.LapsLed DESC
+    """
+
+    return fetch_all(query, locals())
+
+
 @router.get("/api/mx/season/points-progression")
 def get_mx_season_points_progression(year: int, classid: int):
     query = """
@@ -1197,6 +1465,27 @@ def get_mx_season_points_progression(year: int, classid: int):
         CumulativePoints
     FROM RunningTotals
     ORDER BY Round, CumulativePoints DESC
+    """
+
+    return fetch_all(query, locals())
+
+
+@router.get("/api/smx/season/points-progression")
+def get_smx_season_points_progression(year: int, classid: int):
+    query = """
+    SELECT
+        [Year],
+        3 AS SportID,
+        ClassID,
+        ClassRound AS Round,
+        RiderID,
+        FullName,
+        CAST(NULL AS INT) AS RiderCoastID,
+        TotalPoints AS CumulativePoints
+    FROM dbo.vw_SMX_RunningStandings
+    WHERE [Year] = :year
+      AND ClassID = :classid
+    ORDER BY ClassRound, TotalPoints DESC, RiderID
     """
 
     return fetch_all(query, locals())
@@ -1321,7 +1610,7 @@ def get_current_season():
             if not row:
                 return {"error": "No races found"}
 
-            sport = "sx" if row.SportID == 1 else "mx"
+            sport = "sx" if row.SportID == 1 else "mx" if row.SportID == 2 else "smx"
 
             return {
                 "sport": sport,
@@ -1344,7 +1633,7 @@ def get_available_classes(sport_id: int, year: int):
             WHERE rt.Year = :year
               AND rt.SportID = 1
         """
-    else:
+    elif sport_id == 2:
         query = """
             SELECT DISTINCT mo.ClassID
             FROM MX_OVERALLS mo
@@ -1353,5 +1642,16 @@ def get_available_classes(sport_id: int, year: int):
             WHERE rt.Year = :year
               AND rt.SportID = 2
         """
+    elif sport_id == 3:
+        query = """
+            SELECT DISTINCT so.ClassID
+            FROM SMX_OVERALLS so
+            JOIN Race_Table rt
+                ON rt.RaceID = so.RaceID
+            WHERE rt.Year = :year
+              AND rt.SportID = 3
+        """
+    else:
+        raise HTTPException(status_code=400, detail="Invalid sport_id")
 
     return fetch_all(query, {"year": year})

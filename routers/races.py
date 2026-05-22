@@ -9,9 +9,12 @@ router = APIRouter()
 
 
 @router.get("/api/race/overalls")
-def get_mx_overalls(raceid: int, classid: int):
+def get_mx_overalls(raceid: int, classid: int, sport_id: int = 2):
     with pyodbc.connect(CONN_STR) as conn:
         cursor = conn.cursor()
+
+        overall_table = "SMX_OVERALLS" if sport_id == 3 else "MX_OVERALLS"
+        sport_column = "sport_id" if sport_id == 3 else "Sport_ID"
 
         cursor.execute("""
             SELECT
@@ -26,13 +29,14 @@ def get_mx_overalls(raceid: int, classid: int):
                 mo.M1_Start,
                 mo.M2_Start,
                 rl.ImageURL
-            FROM MX_OVERALLS mo
+            FROM {overall_table} mo
             LEFT JOIN Rider_List rl
                 ON rl.RiderID = mo.RiderID
             WHERE mo.raceid = ?
             AND mo.classid = ?
+            AND mo.{sport_column} = ?
             ORDER BY Result
-        """, raceid, classid)
+        """.format(overall_table=overall_table, sport_column=sport_column), raceid, classid, sport_id)
 
         columns = [column[0].lower() for column in cursor.description]
 
@@ -42,6 +46,40 @@ def get_mx_overalls(raceid: int, classid: int):
         ]
 
     return results
+
+
+@router.get("/api/race/smx-motos")
+def get_smx_motos(raceid: int, classid: int, moto: int):
+    with pyodbc.connect(CONN_STR) as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                sm.Result AS Result,
+                sm.riderid AS riderid,
+                COALESCE(rl.FullName, sm.FullName) AS FullName,
+                sm.Brand AS Brand,
+                sm.Interval AS Interval,
+                sm.BestLap AS BestLap,
+                sm.Start AS Start,
+                sm.Holeshot AS Holeshot,
+                sm.RaceStatus AS RaceStatus
+            FROM SMX_MOTOS sm
+            LEFT JOIN Rider_List rl
+                ON rl.RiderID = sm.RiderID
+            WHERE sm.raceid = ?
+              AND sm.classid = ?
+              AND sm.Moto = ?
+              AND sm.sportid = 3
+            ORDER BY sm.Result
+        """, raceid, classid, moto)
+
+        columns = [column[0].lower() for column in cursor.description]
+
+        return [
+            dict(zip(columns, row))
+            for row in cursor.fetchall()
+        ]
 
 
 @router.get("/api/race/consi")
@@ -71,6 +109,34 @@ def get_mx_consi(raceid: int, classid: int):
         ]
 
     return results
+
+
+@router.get("/api/race/smx-wildcard")
+def get_smx_wildcard(raceid: int, classid: int):
+    with pyodbc.connect(CONN_STR) as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                sl.Result AS Result,
+                sl.riderid AS riderid,
+                COALESCE(rl.FullName, sl.FullName) AS FullName,
+                sl.Brand AS Brand
+            FROM SMX_LCQS sl
+            LEFT JOIN Rider_List rl
+                ON rl.RiderID = sl.RiderID
+            WHERE sl.raceid = ?
+              AND sl.classid = ?
+              AND sl.sportid = 3
+            ORDER BY sl.Result
+        """, raceid, classid)
+
+        columns = [column[0].lower() for column in cursor.description]
+
+        return [
+            dict(zip(columns, row))
+            for row in cursor.fetchall()
+        ]
 
 
 @router.get("/api/race/lcqs")
@@ -122,6 +188,9 @@ def get_qualifying(raceid: int, classid: int, sport_id: int):
         with pyodbc.connect(CONN_STR) as conn:
             cursor = conn.cursor()
 
+            qual_table = "SMX_QUAL" if sport_id == 3 else "MX_QUAL"
+            sport_column = "SportId" if sport_id == 3 else "SportID"
+
             cursor.execute("""
                 SELECT
                     mq.Result AS Result,
@@ -129,13 +198,14 @@ def get_qualifying(raceid: int, classid: int, sport_id: int):
                     COALESCE(rl.FullName, mq.FullName) AS FullName,
                     mq.Brand AS Brand,
                     mq.Best_Lap AS Best_Lap
-                FROM MX_QUAL mq
+                FROM {qual_table} mq
                 LEFT JOIN Rider_List rl
                     ON rl.RiderID = mq.RiderID
                 WHERE mq.raceid = ?
                   AND mq.classid = ?
+                  AND mq.{sport_column} = ?
                 ORDER BY mq.Result
-            """, raceid, classid)
+            """.format(qual_table=qual_table, sport_column=sport_column), raceid, classid, sport_id)
 
             columns = [column[0].lower() for column in cursor.description]
 
@@ -272,10 +342,11 @@ def get_supercross_heats(raceid: int, classid: int):
 
 
 @router.get("/api/race/mx-classes")
-def get_mx_classes(raceid: int):
-    query = """
+def get_mx_classes(raceid: int, sport_id: int = 2):
+    result_table = "SMX_OVERALLS" if sport_id == 3 else "MX_OVERALLS"
+    query = f"""
         SELECT DISTINCT ClassID
-        FROM MX_OVERALLS
+        FROM {result_table}
         WHERE RaceID = :raceid
         ORDER BY ClassID
     """

@@ -67,9 +67,10 @@ def post_grid_cache_refresh():
     with urlopen(request, timeout=30) as response:
         body = response.read().decode("utf-8", errors="replace")
 
+    safe_body = body[:500].encode("ascii", errors="replace").decode("ascii")
     print(
         "Grid cache refresh complete "
-        f"(status={getattr(response, 'status', None)}): {body[:500]}"
+        f"(status={getattr(response, 'status', None)}): {safe_body}"
     )
 
 
