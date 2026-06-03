@@ -8,6 +8,293 @@ from error_utils import raise_http_error
 router = APIRouter()
 
 
+def _lap_time_to_seconds(lap_time):
+    if lap_time is None:
+        return None
+
+    value = str(lap_time).strip()
+    if not value:
+        return None
+
+    try:
+        if ":" in value:
+            minutes, seconds = value.split(":", 1)
+            return (int(minutes) * 60) + float(seconds)
+
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _seconds_to_lap_time(seconds):
+    if seconds is None:
+        return None
+
+    if seconds >= 60:
+        minutes = int(seconds // 60)
+        remainder = seconds - (minutes * 60)
+        return f"{minutes}:{remainder:06.3f}"
+
+    return f"{seconds:.3f}"
+
+
+def _standard_deviation(values):
+    if not values:
+        return None
+
+    average = sum(values) / len(values)
+    variance = sum((value - average) ** 2 for value in values) / len(values)
+    return variance ** 0.5
+
+
+def _consistency_percentage(values):
+    if not values:
+        return None
+
+    average = sum(values) / len(values)
+    if average == 0:
+        return None
+
+    standard_deviation = _standard_deviation(values)
+    return 100 - ((standard_deviation / average) * 100)
+
+
+def _build_lap_segment_detail(rows, rank_rows, riderid: int):
+    lap_ranks = {}
+    lap_times_by_lap = {}
+    rider_lap_seconds = {}
+    rider_segment_bests = {}
+    rider_segment_seconds = {}
+
+    for row in rank_rows:
+        seconds = _lap_time_to_seconds(row.get("laptime"))
+
+        if seconds is not None:
+            lap_times_by_lap.setdefault(row.get("lap"), []).append({
+                "riderid": row.get("riderid"),
+                "seconds": seconds,
+            })
+
+            if row.get("lap") != 1:
+                rider_lap_seconds.setdefault(row.get("riderid"), []).append(seconds)
+
+        for segment_number in range(1, 11):
+            key = f"seg_{segment_number}"
+            segment_time = row.get(key)
+            if segment_time is None:
+                continue
+
+            segment_key = (segment_number, row.get("riderid"))
+            previous_best = rider_segment_bests.get(segment_key)
+            if previous_best is None or segment_time < previous_best:
+                rider_segment_bests[segment_key] = segment_time
+
+            rider_segment_seconds.setdefault(segment_key, []).append(segment_time)
+
+    for lap, lap_times in lap_times_by_lap.items():
+        previous_seconds = None
+        current_rank = 0
+
+        for index, lap_time in enumerate(
+            sorted(lap_times, key=lambda item: item["seconds"]),
+            start=1,
+        ):
+            if previous_seconds is None or lap_time["seconds"] != previous_seconds:
+                current_rank = index
+
+            lap_ranks[(lap, lap_time["riderid"])] = current_rank
+            previous_seconds = lap_time["seconds"]
+
+    average_lap_ranks = {}
+    consistency_ranks = {}
+    best_lap_ranks = {}
+    rider_averages = [
+        {
+            "riderid": rank_riderid,
+            "seconds": sum(rank_lap_seconds) / len(rank_lap_seconds),
+        }
+        for rank_riderid, rank_lap_seconds in rider_lap_seconds.items()
+        if rank_lap_seconds
+    ]
+    previous_average_seconds = None
+    current_average_rank = 0
+
+    for index, rider_average in enumerate(
+        sorted(rider_averages, key=lambda item: item["seconds"]),
+        start=1,
+    ):
+        if previous_average_seconds is None or rider_average["seconds"] != previous_average_seconds:
+            current_average_rank = index
+
+        average_lap_ranks[rider_average["riderid"]] = current_average_rank
+        previous_average_seconds = rider_average["seconds"]
+
+    rider_consistency_scores = [
+        {
+            "riderid": rank_riderid,
+            "seconds": _standard_deviation(rank_lap_seconds),
+        }
+        for rank_riderid, rank_lap_seconds in rider_lap_seconds.items()
+        if rank_lap_seconds
+    ]
+    previous_consistency_seconds = None
+    current_consistency_rank = 0
+
+    for index, rider_consistency in enumerate(
+        sorted(rider_consistency_scores, key=lambda item: item["seconds"]),
+        start=1,
+    ):
+        if (
+            previous_consistency_seconds is None
+            or rider_consistency["seconds"] != previous_consistency_seconds
+        ):
+            current_consistency_rank = index
+
+        consistency_ranks[rider_consistency["riderid"]] = current_consistency_rank
+        previous_consistency_seconds = rider_consistency["seconds"]
+
+    rider_best_laps = [
+        {
+            "riderid": rank_riderid,
+            "seconds": min(rank_lap_seconds),
+        }
+        for rank_riderid, rank_lap_seconds in rider_lap_seconds.items()
+        if rank_lap_seconds
+    ]
+    previous_best_lap_seconds = None
+    current_best_lap_rank = 0
+
+    for index, rider_best_lap in enumerate(
+        sorted(rider_best_laps, key=lambda item: item["seconds"]),
+        start=1,
+    ):
+        if previous_best_lap_seconds is None or rider_best_lap["seconds"] != previous_best_lap_seconds:
+            current_best_lap_rank = index
+
+        best_lap_ranks[rider_best_lap["riderid"]] = current_best_lap_rank
+        previous_best_lap_seconds = rider_best_lap["seconds"]
+
+    segment_best_ranks = {}
+    segment_average_ranks = {}
+    for segment_number in range(1, 11):
+        segment_bests_for_rank = [
+            {
+                "riderid": segment_riderid,
+                "seconds": segment_time,
+            }
+            for (rank_segment, segment_riderid), segment_time in rider_segment_bests.items()
+            if rank_segment == segment_number
+        ]
+        previous_segment_seconds = None
+        current_segment_rank = 0
+
+        for index, segment_best in enumerate(
+            sorted(segment_bests_for_rank, key=lambda item: item["seconds"]),
+            start=1,
+        ):
+            if previous_segment_seconds is None or segment_best["seconds"] != previous_segment_seconds:
+                current_segment_rank = index
+
+            segment_best_ranks[(segment_number, segment_best["riderid"])] = current_segment_rank
+            previous_segment_seconds = segment_best["seconds"]
+
+        segment_averages_for_rank = [
+            {
+                "riderid": segment_riderid,
+                "seconds": sum(segment_seconds) / len(segment_seconds),
+            }
+            for (rank_segment, segment_riderid), segment_seconds in rider_segment_seconds.items()
+            if rank_segment == segment_number and segment_seconds
+        ]
+        previous_segment_average_seconds = None
+        current_segment_average_rank = 0
+
+        for index, segment_average in enumerate(
+            sorted(segment_averages_for_rank, key=lambda item: item["seconds"]),
+            start=1,
+        ):
+            if (
+                previous_segment_average_seconds is None
+                or segment_average["seconds"] != previous_segment_average_seconds
+            ):
+                current_segment_average_rank = index
+
+            segment_average_ranks[(segment_number, segment_average["riderid"])] = current_segment_average_rank
+            previous_segment_average_seconds = segment_average["seconds"]
+
+    lap_seconds = [
+        seconds
+        for seconds in (
+            _lap_time_to_seconds(row.get("laptime"))
+            for row in rows
+            if row.get("lap") != 1
+        )
+        if seconds is not None
+    ]
+    average_seconds = sum(lap_seconds) / len(lap_seconds) if lap_seconds else None
+    consistency_percentage = _consistency_percentage(lap_seconds)
+    best_lap_seconds = min(lap_seconds) if lap_seconds else None
+
+    segment_bests = []
+    segment_averages = []
+    for segment_number in range(1, 11):
+        key = f"seg_{segment_number}"
+        best_row = None
+        best_time = None
+        segment_times = []
+
+        for row in rows:
+            segment_time = row.get(key)
+            if segment_time is None:
+                continue
+
+            segment_times.append(segment_time)
+
+            if best_time is None or segment_time < best_time:
+                best_time = segment_time
+                best_row = row
+
+        if best_row is not None:
+            segment_bests.append({
+                "segment": segment_number,
+                "time": round(best_time, 3),
+                "lap": best_row.get("lap"),
+                "rank": segment_best_ranks.get((segment_number, riderid)),
+            })
+
+        if segment_times:
+            average_segment_time = sum(segment_times) / len(segment_times)
+            segment_averages.append({
+                "segment": segment_number,
+                "time": round(average_segment_time, 3),
+                "rank": segment_average_ranks.get((segment_number, riderid)),
+            })
+
+    return {
+        "average_lap_time": _seconds_to_lap_time(average_seconds),
+        "average_lap_rank": average_lap_ranks.get(riderid),
+        "best_lap_time": _seconds_to_lap_time(best_lap_seconds),
+        "best_lap_rank": best_lap_ranks.get(riderid),
+        "consistency_score": (
+            f"{consistency_percentage:.3f}%"
+            if consistency_percentage is not None
+            else None
+        ),
+        "consistency_rank": consistency_ranks.get(riderid),
+        "laps": [
+            {
+                "lap": row.get("lap"),
+                "laptime": row.get("laptime"),
+                "position": row.get("position"),
+                "laptime_rank": lap_ranks.get((row.get("lap"), row.get("riderid"))),
+            }
+            for row in rows
+        ],
+        "segment_bests": segment_bests,
+        "segment_averages": segment_averages,
+    }
+
+
 @router.get("/api/race/overalls")
 def get_mx_overalls(raceid: int, classid: int, sport_id: int = 2):
     with pyodbc.connect(CONN_STR) as conn:
@@ -80,6 +367,97 @@ def get_smx_motos(raceid: int, classid: int, moto: int):
             dict(zip(columns, row))
             for row in cursor.fetchall()
         ]
+
+
+@router.get("/api/race/mx-motos")
+def get_mx_motos(raceid: int, classid: int, moto: int):
+    with pyodbc.connect(CONN_STR) as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                mm.Result AS Result,
+                mm.riderid AS riderid,
+                COALESCE(rl.FullName, mm.FullName) AS FullName,
+                mm.Brand AS Brand,
+                mm.Interval AS Interval,
+                mm.BestLap AS BestLap,
+                mm.Start AS Start,
+                mm.Holeshot AS Holeshot,
+                mm.RaceStatus AS RaceStatus
+            FROM MX_MOTOS mm
+            LEFT JOIN Rider_List rl
+                ON rl.RiderID = mm.RiderID
+            WHERE mm.raceid = ?
+              AND mm.classid = ?
+              AND mm.Moto = ?
+              AND mm.sportid = 2
+            ORDER BY mm.Result
+        """, raceid, classid, moto)
+
+        columns = [column[0].lower() for column in cursor.description]
+
+        return [
+            dict(zip(columns, row))
+            for row in cursor.fetchall()
+        ]
+
+
+@router.get("/api/race/mx-moto-rider-details")
+def get_mx_moto_rider_details(raceid: int, classid: int, moto: int, riderid: int):
+    params = {
+        "raceid": raceid,
+        "classid": classid,
+        "moto": moto,
+        "riderid": riderid,
+    }
+    rows = fetch_all("""
+        SELECT
+            mms.LAP      AS lap,
+            mms.riderid  AS riderid,
+            mms.LAPTIME  AS laptime,
+            mms.position AS position,
+            mms.SEG_1    AS seg_1,
+            mms.SEG_2    AS seg_2,
+            mms.SEG_3    AS seg_3,
+            mms.SEG_4    AS seg_4,
+            mms.SEG_5    AS seg_5,
+            mms.SEG_6    AS seg_6,
+            mms.SEG_7    AS seg_7,
+            mms.SEG_8    AS seg_8,
+            mms.SEG_9    AS seg_9,
+            mms.SEG_10   AS seg_10
+        FROM dbo.MX_MOTO_SEGMENTS mms
+        WHERE mms.raceid = :raceid
+          AND mms.classid = :classid
+          AND mms.Moto = :moto
+          AND mms.riderid = :riderid
+          AND mms.sportid = 2
+        ORDER BY mms.LAP
+    """, params)
+    rank_rows = fetch_all("""
+        SELECT
+            mms.LAP     AS lap,
+            mms.riderid AS riderid,
+            mms.LAPTIME AS laptime,
+            mms.SEG_1   AS seg_1,
+            mms.SEG_2   AS seg_2,
+            mms.SEG_3   AS seg_3,
+            mms.SEG_4   AS seg_4,
+            mms.SEG_5   AS seg_5,
+            mms.SEG_6   AS seg_6,
+            mms.SEG_7   AS seg_7,
+            mms.SEG_8   AS seg_8,
+            mms.SEG_9   AS seg_9,
+            mms.SEG_10  AS seg_10
+        FROM dbo.MX_MOTO_SEGMENTS mms
+        WHERE mms.raceid = :raceid
+          AND mms.classid = :classid
+          AND mms.Moto = :moto
+          AND mms.sportid = 2
+    """, params)
+
+    return _build_lap_segment_detail(rows, rank_rows, riderid)
 
 
 @router.get("/api/race/consi")
@@ -309,6 +687,73 @@ def get_supercross_triple_crown_mains(raceid: int):
             response[f"class250_main{main}"].append(row)
 
     return response
+
+
+@router.get("/api/race/main-event-rider-details")
+def get_supercross_main_event_rider_details(
+    raceid: int,
+    classid: int,
+    riderid: int,
+    tcmain: int | None = None,
+):
+    tcmain_filter = "AND sms.TCmain = :tcmain" if tcmain is not None else "AND sms.TCmain IS NULL"
+    query = f"""
+        SELECT
+            sms.LAP      AS lap,
+            sms.riderid  AS riderid,
+            sms.LAPTIME  AS laptime,
+            sms.position AS position,
+            sms.SEG_1    AS seg_1,
+            sms.SEG_2    AS seg_2,
+            sms.SEG_3    AS seg_3,
+            sms.SEG_4    AS seg_4,
+            sms.SEG_5    AS seg_5,
+            sms.SEG_6    AS seg_6,
+            sms.SEG_7    AS seg_7,
+            sms.SEG_8    AS seg_8,
+            sms.SEG_9    AS seg_9,
+            sms.SEG_10   AS seg_10
+        FROM dbo.SX_MAIN_SEGMENTS sms
+        WHERE sms.raceid = :raceid
+          AND sms.classid = :classid
+          AND sms.riderid = :riderid
+          AND sms.sportid = 1
+          {tcmain_filter}
+        ORDER BY sms.LAP
+    """
+
+    params = {
+        "raceid": raceid,
+        "classid": classid,
+        "riderid": riderid,
+    }
+    if tcmain is not None:
+        params["tcmain"] = tcmain
+
+    rows = fetch_all(query, params)
+    rank_rows = fetch_all(f"""
+        SELECT
+            sms.LAP     AS lap,
+            sms.riderid AS riderid,
+            sms.LAPTIME AS laptime,
+            sms.SEG_1   AS seg_1,
+            sms.SEG_2   AS seg_2,
+            sms.SEG_3   AS seg_3,
+            sms.SEG_4   AS seg_4,
+            sms.SEG_5   AS seg_5,
+            sms.SEG_6   AS seg_6,
+            sms.SEG_7   AS seg_7,
+            sms.SEG_8   AS seg_8,
+            sms.SEG_9   AS seg_9,
+            sms.SEG_10  AS seg_10
+        FROM dbo.SX_MAIN_SEGMENTS sms
+        WHERE sms.raceid = :raceid
+          AND sms.classid = :classid
+          AND sms.sportid = 1
+          {tcmain_filter}
+    """, params)
+
+    return _build_lap_segment_detail(rows, rank_rows, riderid)
 
 
 @router.get("/api/race/heats")
