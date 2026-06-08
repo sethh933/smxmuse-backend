@@ -472,6 +472,40 @@ def _save_entity_links(conn, note_id, entities):
         })
 
 
+def _rebuild_note_entity_links(conn, note_id):
+    row = conn.execute(text("""
+        SELECT TOP 1
+            NoteID,
+            Title,
+            RaceName,
+            Summary
+        FROM dbo.ContentNotes
+        WHERE NoteID = :note_id
+    """), {"note_id": note_id}).mappings().first()
+
+    if not row:
+        return False
+
+    edit_sections = _load_edit_sections(conn, note_id)
+    parts = [
+        row["Title"],
+        row["RaceName"],
+        row["Summary"],
+    ]
+
+    for section in edit_sections:
+        parts.append(section.get("heading"))
+
+        for slide in section.get("slides") or []:
+            parts.append(slide.get("heading"))
+            parts.append(slide.get("body"))
+
+    entities = _resolve_entities(conn, "\n".join(part for part in parts if part))
+    _save_entity_links(conn, note_id, entities)
+
+    return True
+
+
 def _load_sections(conn, note_id):
     section_rows = conn.execute(text("""
         SELECT SectionID, Heading
@@ -884,4 +918,27 @@ def update_admin_note(
         "slug": slug,
         "path": f"/notes/{slug}",
         "status": note.status,
+    }
+
+
+@router.post("/api/admin/notes/backfill-entity-links")
+def backfill_note_entity_links(x_admin_token: Optional[str] = Header(default=None)):
+    _require_admin_token(x_admin_token)
+    _ensure_notes_tables()
+
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT NoteID
+            FROM dbo.ContentNotes
+            ORDER BY NoteID
+        """)).mappings().all()
+
+        rebuilt_count = 0
+
+        for row in rows:
+            if _rebuild_note_entity_links(conn, row["NoteID"]):
+                rebuilt_count += 1
+
+    return {
+        "rebuilt": rebuilt_count,
     }
