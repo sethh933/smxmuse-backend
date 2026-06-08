@@ -152,26 +152,24 @@ def _get_entity_directory(conn):
     return ENTITY_DIRECTORY
 
 
-def _collect_note_text(note, sections=None):
+def _collect_note_input_text(note):
     parts = [
-        note.get("title"),
-        note.get("summary"),
-        note.get("race"),
+        note.title,
+        note.summary,
+        note.race,
     ]
 
-    for section in sections or []:
-        parts.append(section.get("heading"))
+    for section in note.sections or []:
+        parts.append(section.heading)
 
-        for subsection in section.get("subsections") or []:
-            parts.append(subsection.get("heading"))
-            parts.extend(subsection.get("paragraphs") or [])
+        for slide in section.slides or []:
+            parts.append(slide.heading)
+            parts.append(slide.body)
 
     return "\n".join(part for part in parts if part)
 
 
-def _resolve_entities(conn, note, sections=None):
-    text_to_match = _collect_note_text(note, sections)
-
+def _resolve_entities(conn, text_to_match):
     if not text_to_match:
         return {"riders": [], "tracks": []}
 
@@ -258,6 +256,21 @@ def _ensure_notes_tables():
                 );
             END;
 
+            IF OBJECT_ID('dbo.ContentNoteEntityLinks', 'U') IS NULL
+            BEGIN
+                CREATE TABLE dbo.ContentNoteEntityLinks (
+                    EntityLinkID INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+                    NoteID INT NOT NULL,
+                    EntityType NVARCHAR(20) NOT NULL,
+                    EntityID INT NOT NULL,
+                    EntityName NVARCHAR(255) NOT NULL,
+                    EntityPath NVARCHAR(500) NOT NULL,
+                    SportID INT NULL,
+                    CreatedAt DATETIME2(0) NOT NULL
+                        CONSTRAINT DF_ContentNoteEntityLinks_CreatedAt DEFAULT SYSUTCDATETIME()
+                );
+            END;
+
             IF NOT EXISTS (
                 SELECT 1
                 FROM sys.indexes
@@ -294,6 +307,30 @@ def _ensure_notes_tables():
                     REFERENCES dbo.ContentNoteSections(SectionID)
                     ON DELETE CASCADE;
             END;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM sys.foreign_keys
+                WHERE name = 'FK_ContentNoteEntityLinks_ContentNotes'
+            )
+            BEGIN
+                ALTER TABLE dbo.ContentNoteEntityLinks
+                ADD CONSTRAINT FK_ContentNoteEntityLinks_ContentNotes
+                    FOREIGN KEY (NoteID)
+                    REFERENCES dbo.ContentNotes(NoteID)
+                    ON DELETE CASCADE;
+            END;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM sys.indexes
+                WHERE name = 'IX_ContentNoteEntityLinks_NoteID'
+                  AND object_id = OBJECT_ID('dbo.ContentNoteEntityLinks')
+            )
+            BEGIN
+                CREATE INDEX IX_ContentNoteEntityLinks_NoteID
+                    ON dbo.ContentNoteEntityLinks (NoteID);
+            END;
         """))
 
     NOTES_TABLES_READY = True
@@ -327,13 +364,112 @@ def _serialize_note(row, sections=None):
     return note
 
 
-def _serialize_note_with_entities(conn, row):
+def _serialize_note_with_entities(conn, row, include_edit_sections=False):
     sections = _load_sections(conn, row["NoteID"])
     note = _serialize_note(row, sections)
-    note["sections"] = _load_edit_sections(conn, row["NoteID"])
-    note["entities"] = _resolve_entities(conn, note, sections)
+
+    if include_edit_sections:
+        note["sections"] = _load_edit_sections(conn, row["NoteID"])
+
+    note["entities"] = _load_entity_links(conn, row["NoteID"])
 
     return note
+
+
+def _load_entity_links(conn, note_id):
+    rows = conn.execute(text("""
+        SELECT
+            EntityType,
+            EntityID,
+            EntityName,
+            EntityPath,
+            SportID
+        FROM dbo.ContentNoteEntityLinks
+        WHERE NoteID = :note_id
+        ORDER BY EntityType, EntityName
+    """), {"note_id": note_id}).mappings().all()
+
+    entities = {
+        "riders": [],
+        "tracks": [],
+    }
+
+    for row in rows:
+        if row["EntityType"] == "rider":
+            entities["riders"].append({
+                "type": "rider",
+                "id": row["EntityID"],
+                "name": row["EntityName"],
+                "path": row["EntityPath"],
+            })
+        elif row["EntityType"] == "track":
+            entities["tracks"].append({
+                "type": "track",
+                "id": row["EntityID"],
+                "sportId": row["SportID"],
+                "name": row["EntityName"],
+                "path": row["EntityPath"],
+            })
+
+    return entities
+
+
+def _save_entity_links(conn, note_id, entities):
+    conn.execute(text("""
+        DELETE FROM dbo.ContentNoteEntityLinks
+        WHERE NoteID = :note_id
+    """), {"note_id": note_id})
+
+    for rider in entities.get("riders", []):
+        conn.execute(text("""
+            INSERT INTO dbo.ContentNoteEntityLinks (
+                NoteID,
+                EntityType,
+                EntityID,
+                EntityName,
+                EntityPath,
+                SportID
+            )
+            VALUES (
+                :note_id,
+                'rider',
+                :entity_id,
+                :entity_name,
+                :entity_path,
+                NULL
+            )
+        """), {
+            "note_id": note_id,
+            "entity_id": rider["id"],
+            "entity_name": rider["name"],
+            "entity_path": rider["path"],
+        })
+
+    for track in entities.get("tracks", []):
+        conn.execute(text("""
+            INSERT INTO dbo.ContentNoteEntityLinks (
+                NoteID,
+                EntityType,
+                EntityID,
+                EntityName,
+                EntityPath,
+                SportID
+            )
+            VALUES (
+                :note_id,
+                'track',
+                :entity_id,
+                :entity_name,
+                :entity_path,
+                :sport_id
+            )
+        """), {
+            "note_id": note_id,
+            "entity_id": track["id"],
+            "entity_name": track["name"],
+            "entity_path": track["path"],
+            "sport_id": track.get("sportId"),
+        })
 
 
 def _load_sections(conn, note_id):
@@ -608,7 +744,7 @@ def get_admin_note(slug: str, x_admin_token: Optional[str] = Header(default=None
         if not row:
             return None
 
-        return _serialize_note_with_entities(conn, row)
+        return _serialize_note_with_entities(conn, row, include_edit_sections=True)
 
 
 @router.post("/api/admin/notes")
@@ -676,6 +812,7 @@ def create_admin_note(note: NoteInput, x_admin_token: Optional[str] = Header(def
         }).scalar_one()
 
         _save_note_sections(conn, note_id, note.sections)
+        _save_entity_links(conn, note_id, _resolve_entities(conn, _collect_note_input_text(note)))
 
     return {
         "id": note_id,
@@ -740,6 +877,7 @@ def update_admin_note(
         })
 
         _save_note_sections(conn, note_id, note.sections)
+        _save_entity_links(conn, note_id, _resolve_entities(conn, _collect_note_input_text(note)))
 
     return {
         "id": note_id,
