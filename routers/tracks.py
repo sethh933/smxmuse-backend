@@ -39,6 +39,7 @@ def get_track_profile(track_id: int, sport_id: int, class_id: int):
             rt.RaceID,
             rt.RaceDate,
             tt.City,
+            tt.State,
             fm.RiderID,
             fm.FullName AS Winner,
             fm.Brand
@@ -106,6 +107,7 @@ def get_track_profile(track_id: int, sport_id: int, class_id: int):
             rt.RaceID,
             rt.RaceDate,
             tt.City,
+            tt.State,
             fm.RiderID,
             fm.FullName AS Winner,
             fm.Brand
@@ -173,6 +175,7 @@ def get_track_profile(track_id: int, sport_id: int, class_id: int):
             rt.RaceID,
             rt.RaceDate,
             tt.City,
+            tt.State,
             fm.RiderID,
             fm.FullName AS Winner,
             fm.Brand
@@ -282,9 +285,14 @@ def get_race_header(raceid: int):
         rt.Year,
         rt.TrackName,
         tt.City,
+        tt.Indoors,
         rt.SportID,
         rt.CoastID,
         rt.TripleCrownID,
+        rt.TemperatureHigh,
+        rt.TemperatureLow,
+        rt.Precipitation,
+        rt.Conditions,
         maxRounds.MaxRound
     FROM Race_Table rt
     LEFT JOIN TrackTable tt
