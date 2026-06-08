@@ -5,6 +5,7 @@ from db import FRONTEND_ORIGINS
 from routers.admin import router as admin_router
 from routers.comparisons import router as comparisons_router
 from routers.leaderboards import router as leaderboards_router
+from routers.notes import router as notes_router
 from routers.races import router as races_router
 from routers.riders import router as riders_router
 from routers.search import router as search_router
@@ -35,4 +36,5 @@ app.include_router(races_router)
 app.include_router(seasons_router)
 app.include_router(comparisons_router)
 app.include_router(riders_router)
+app.include_router(notes_router)
 app.include_router(admin_router)
