@@ -851,7 +851,7 @@ def create_admin_note(note: NoteInput, x_admin_token: Optional[str] = Header(def
     return {
         "id": note_id,
         "slug": slug,
-        "path": f"/notes/{slug}",
+        "path": f"/news/{slug}",
         "status": note.status,
     }
 
@@ -916,7 +916,7 @@ def update_admin_note(
     return {
         "id": note_id,
         "slug": slug,
-        "path": f"/notes/{slug}",
+        "path": f"/news/{slug}",
         "status": note.status,
     }
 
