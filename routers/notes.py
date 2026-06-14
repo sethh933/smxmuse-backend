@@ -13,7 +13,6 @@ from routers.admin import _require_admin_token
 router = APIRouter()
 
 NOTES_TABLES_READY = False
-ENTITY_DIRECTORY = None
 VALID_CATEGORIES = {"preRace", "raceRecap"}
 
 
@@ -79,11 +78,6 @@ def _entity_pattern(name):
 
 
 def _get_entity_directory(conn):
-    global ENTITY_DIRECTORY
-
-    if ENTITY_DIRECTORY is not None:
-        return ENTITY_DIRECTORY
-
     rider_rows = conn.execute(text("""
         WITH RiderDirectory AS (
             SELECT
@@ -127,7 +121,7 @@ def _get_entity_directory(conn):
         WHERE TrackRank = 1
     """)).mappings().all()
 
-    ENTITY_DIRECTORY = {
+    return {
         "riders": [
             {
                 "type": "rider",
@@ -148,8 +142,6 @@ def _get_entity_directory(conn):
             for row in track_rows
         ],
     }
-
-    return ENTITY_DIRECTORY
 
 
 def _collect_note_input_text(note):
