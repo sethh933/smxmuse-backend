@@ -108,6 +108,121 @@ def _get_rider_identity_and_availability(cursor, rider_id: int):
     return rider_data, availability.HasSX == 1, availability.HasMX == 1, availability.HasSMX == 1
 
 
+def _format_year_ranges(years):
+    if not years:
+        return ""
+
+    ranges = []
+    start = years[0]
+    previous = years[0]
+
+    for year in years[1:]:
+        if year == previous + 1:
+            previous = year
+            continue
+
+        ranges.append(str(start) if start == previous else f"{start}-{previous}")
+        start = year
+        previous = year
+
+    ranges.append(str(start) if start == previous else f"{start}-{previous}")
+    return ", ".join(ranges)
+
+
+def _get_rider_number_history(cursor, rider_id: int):
+    cursor.execute(
+        """
+        SELECT DISTINCT
+            CAST(Number AS INT) AS Number,
+            CAST([year] AS INT) AS [Year]
+        FROM Rider_Numbers
+        WHERE riderid = ?
+          AND Number IS NOT NULL
+          AND [year] IS NOT NULL
+        ORDER BY [Year], Number
+        """,
+        rider_id,
+    )
+
+    number_years = {}
+    for row in cursor.fetchall():
+        number_years.setdefault(row.Number, set()).add(row.Year)
+
+    number_history = []
+    for number, years_set in number_years.items():
+        years = sorted(years_set)
+        year_context = _format_year_ranges(years)
+        number_history.append(
+            {
+                "number": number,
+                "first_year": years[0],
+                "last_year": years[-1],
+                "years": years,
+                "year_context": year_context,
+            }
+        )
+
+    return sorted(number_history, key=lambda item: (item["first_year"], item["number"]))
+
+
+def _get_rider_accolades(cursor, rider_id: int):
+    cursor.execute(
+        """
+        SELECT
+            SportID,
+            ClassID,
+            COUNT(*) AS Titles
+        FROM Champions
+        WHERE RiderID = ?
+        GROUP BY SportID, ClassID
+        ORDER BY
+            CASE SportID
+                WHEN 1 THEN 1
+                WHEN 2 THEN 2
+                WHEN 3 THEN 3
+                ELSE 9
+            END,
+            CASE ClassID
+                WHEN 1 THEN 1
+                WHEN 2 THEN 2
+                WHEN 3 THEN 3
+                ELSE 9
+            END
+        """,
+        rider_id,
+    )
+
+    sport_labels = {
+        1: "SX",
+        2: "MX",
+        3: "SMX",
+    }
+    class_labels = {
+        1: "450",
+        2: "250",
+        3: "500",
+    }
+
+    accolades = []
+    for row in cursor.fetchall():
+        sport_label = sport_labels.get(row.SportID)
+        class_label = class_labels.get(row.ClassID)
+        if not sport_label or not class_label:
+            continue
+
+        championship_label = "Championship" if row.Titles == 1 else "Championships"
+        accolades.append(
+            {
+                "sport_id": row.SportID,
+                "class_id": row.ClassID,
+                "titles": row.Titles,
+                "label": f"{row.Titles}x {class_label} {sport_label} {championship_label}",
+            }
+        )
+
+    return accolades
+
+
 def _get_sx_profile_payload_from_summary(cursor, rider_id: int):
     try:
         cursor.execute(
@@ -1769,6 +1884,8 @@ def get_rider_profile(rider_id: int, sport: str = "SX"):
         with pyodbc.connect(CONN_STR) as conn:
             cursor = conn.cursor()
             rider_data, has_sx, has_mx, has_smx = _get_rider_identity_and_availability(cursor, rider_id)
+            number_history = _get_rider_number_history(cursor, rider_id)
+            accolades = _get_rider_accolades(cursor, rider_id)
 
             if sport.upper() == "SMX":
                 payload = _get_smx_profile_payload_from_summary(cursor, rider_id)
@@ -1794,6 +1911,8 @@ def get_rider_profile(rider_id: int, sport: str = "SX"):
                 "hasSX": has_sx,
                 "hasMX": has_mx,
                 "hasSMX": has_smx,
+                "number_history": number_history,
+                "accolades": accolades,
                 **payload,
             }
     except Exception as e:
