@@ -2,7 +2,7 @@ from datetime import date
 import re
 from typing import List, Literal, Optional
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -867,7 +867,7 @@ def update_admin_note(
         """), {"slug": slug}).mappings().first()
 
         if not existing:
-            return None
+            raise HTTPException(status_code=404, detail="Draft not found.")
 
         note_id = existing["NoteID"]
 
@@ -910,6 +910,55 @@ def update_admin_note(
         "slug": slug,
         "path": f"/news/{slug}",
         "status": note.status,
+    }
+
+
+@router.delete("/api/admin/notes/{slug}")
+def delete_admin_note(slug: str, x_admin_token: Optional[str] = Header(default=None)):
+    _require_admin_token(x_admin_token)
+    _ensure_notes_tables()
+
+    with engine.begin() as conn:
+        existing = conn.execute(text("""
+            SELECT TOP 1 NoteID, Status
+            FROM dbo.ContentNotes
+            WHERE Slug = :slug
+        """), {"slug": slug}).mappings().first()
+
+        if not existing:
+            return None
+
+        if existing["Status"] != "draft":
+            raise HTTPException(status_code=400, detail="Only draft news posts can be deleted.")
+
+        note_id = existing["NoteID"]
+
+        conn.execute(text("""
+            DELETE FROM dbo.ContentNoteEntityLinks
+            WHERE NoteID = :note_id
+        """), {"note_id": note_id})
+
+        conn.execute(text("""
+            DELETE slides
+            FROM dbo.ContentNoteSlides slides
+            JOIN dbo.ContentNoteSections sections
+                ON sections.SectionID = slides.SectionID
+            WHERE sections.NoteID = :note_id
+        """), {"note_id": note_id})
+
+        conn.execute(text("""
+            DELETE FROM dbo.ContentNoteSections
+            WHERE NoteID = :note_id
+        """), {"note_id": note_id})
+
+        conn.execute(text("""
+            DELETE FROM dbo.ContentNotes
+            WHERE NoteID = :note_id
+        """), {"note_id": note_id})
+
+    return {
+        "deleted": True,
+        "slug": slug,
     }
 
 
