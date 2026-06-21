@@ -295,6 +295,150 @@ def _build_lap_segment_detail(rows, rank_rows, riderid: int):
     }
 
 
+def _rank_values(items):
+    ranks = {}
+    previous_value = None
+    current_rank = 0
+
+    for index, item in enumerate(
+        sorted(items, key=lambda rank_item: rank_item["value"]),
+        start=1,
+    ):
+        if previous_value is None or item["value"] != previous_value:
+            current_rank = index
+
+        ranks[item["key"]] = current_rank
+        previous_value = item["value"]
+
+    return ranks
+
+
+def _build_qualifying_session_detail(rows, rank_rows, riderid: int):
+    session_laps = {}
+    session_segment_bests = {}
+
+    for row in rank_rows:
+        session_key = (row.get("group"), row.get("session"))
+        seconds = _lap_time_to_seconds(row.get("laptime"))
+
+        if seconds is not None and row.get("lap") != 1:
+            session_laps.setdefault(session_key, {}).setdefault(row.get("riderid"), []).append({
+                "seconds": seconds,
+                "laptime": row.get("laptime"),
+                "lap": row.get("lap"),
+            })
+
+        for segment_number in range(1, 11):
+            key = f"seg_{segment_number}"
+            segment_time = row.get(key)
+            if segment_time is None:
+                continue
+
+            segment_key = (session_key, segment_number, row.get("riderid"))
+            previous_best = session_segment_bests.get(segment_key)
+            if previous_best is None or segment_time < previous_best["time"]:
+                session_segment_bests[segment_key] = {
+                    "time": segment_time,
+                    "lap": row.get("lap"),
+                }
+
+    fastest_ranks = {}
+    second_fastest_ranks = {}
+    segment_ranks = {}
+
+    for session_key, laps_by_rider in session_laps.items():
+        fastest_items = []
+        second_fastest_items = []
+
+        for rank_riderid, laps in laps_by_rider.items():
+            sorted_laps = sorted(laps, key=lambda lap: lap["seconds"])
+            if sorted_laps:
+                fastest_items.append({
+                    "key": (session_key, rank_riderid),
+                    "value": sorted_laps[0]["seconds"],
+                })
+            if len(sorted_laps) > 1:
+                second_fastest_items.append({
+                    "key": (session_key, rank_riderid),
+                    "value": sorted_laps[1]["seconds"],
+                })
+
+        fastest_ranks.update(_rank_values(fastest_items))
+        second_fastest_ranks.update(_rank_values(second_fastest_items))
+
+        for segment_number in range(1, 11):
+            segment_items = [
+                {
+                    "key": (session_key, segment_number, segment_riderid),
+                    "value": segment_best["time"],
+                }
+                for (
+                    rank_session_key,
+                    rank_segment_number,
+                    segment_riderid,
+                ), segment_best in session_segment_bests.items()
+                if rank_session_key == session_key and rank_segment_number == segment_number
+            ]
+            segment_ranks.update(_rank_values(segment_items))
+
+    rider_sessions = {}
+
+    for row in rows:
+        session_key = (row.get("group"), row.get("session"))
+        rider_sessions.setdefault(session_key, []).append(row)
+
+    sessions = []
+
+    for session_key, session_rows in sorted(
+        rider_sessions.items(),
+        key=lambda item: (str(item[0][0] or ""), item[0][1] or 0),
+    ):
+        session_group, session_number = session_key
+        timed_laps = [
+            {
+                "seconds": seconds,
+                "laptime": row.get("laptime"),
+                "lap": row.get("lap"),
+            }
+            for row in session_rows
+            for seconds in [_lap_time_to_seconds(row.get("laptime"))]
+            if seconds is not None and row.get("lap") != 1
+        ]
+        sorted_timed_laps = sorted(timed_laps, key=lambda lap: lap["seconds"])
+        fastest_lap = sorted_timed_laps[0] if sorted_timed_laps else None
+        second_fastest_lap = sorted_timed_laps[1] if len(sorted_timed_laps) > 1 else None
+
+        segment_bests = []
+        for segment_number in range(1, 11):
+            segment_key = (session_key, segment_number, riderid)
+            segment_best = session_segment_bests.get(segment_key)
+            if segment_best is None:
+                continue
+
+            segment_bests.append({
+                "segment": segment_number,
+                "time": round(float(segment_best["time"]), 3),
+                "lap": segment_best["lap"],
+                "rank": segment_ranks.get(segment_key),
+            })
+
+        sessions.append({
+            "group": session_group,
+            "session": session_number,
+            "fastest_lap_time": fastest_lap["laptime"] if fastest_lap else None,
+            "fastest_lap": fastest_lap["lap"] if fastest_lap else None,
+            "fastest_lap_rank": fastest_ranks.get((session_key, riderid)),
+            "second_fastest_lap_time": (
+                second_fastest_lap["laptime"] if second_fastest_lap else None
+            ),
+            "second_fastest_lap": second_fastest_lap["lap"] if second_fastest_lap else None,
+            "second_fastest_lap_rank": second_fastest_ranks.get((session_key, riderid)),
+            "segment_bests": segment_bests,
+        })
+
+    return {"sessions": sessions}
+
+
 @router.get("/api/race/overalls")
 def get_mx_overalls(raceid: int, classid: int, sport_id: int = 2):
     with pyodbc.connect(CONN_STR) as conn:
@@ -594,6 +738,102 @@ def get_qualifying(raceid: int, classid: int, sport_id: int):
 
     except Exception as e:
         raise_http_error("Failed to load race qualifying results.", e)
+
+
+@router.get("/api/race/mx-qualifying-rider-details")
+def get_mx_qualifying_rider_details(raceid: int, classid: int, riderid: int):
+    params = {
+        "raceid": raceid,
+        "classid": classid,
+        "riderid": riderid,
+    }
+    query_columns = """
+        mqs.[Group]  AS [group],
+        mqs.[Session] AS session,
+        mqs.Lap      AS lap,
+        mqs.riderid  AS riderid,
+        mqs.Laptime  AS laptime,
+        mqs.SEG_1    AS seg_1,
+        mqs.SEG_2    AS seg_2,
+        mqs.SEG_3    AS seg_3,
+        mqs.SEG_4    AS seg_4,
+        mqs.SEG_5    AS seg_5,
+        mqs.SEG_6    AS seg_6,
+        mqs.SEG_7    AS seg_7,
+        mqs.SEG_8    AS seg_8,
+        mqs.SEG_9    AS seg_9,
+        mqs.SEG_10   AS seg_10
+    """
+
+    rows = fetch_all(f"""
+        SELECT
+            {query_columns}
+        FROM dbo.MX_QUAL_SESSIONS mqs
+        WHERE mqs.raceid = :raceid
+          AND mqs.classid = :classid
+          AND mqs.riderid = :riderid
+          AND mqs.sportid = 2
+        ORDER BY mqs.[Group], mqs.[Session], mqs.Lap
+    """, params)
+
+    rank_rows = fetch_all(f"""
+        SELECT
+            {query_columns}
+        FROM dbo.MX_QUAL_SESSIONS mqs
+        WHERE mqs.raceid = :raceid
+          AND mqs.classid = :classid
+          AND mqs.sportid = 2
+    """, params)
+
+    return _build_qualifying_session_detail(rows, rank_rows, riderid)
+
+
+@router.get("/api/race/sx-qualifying-rider-details")
+def get_sx_qualifying_rider_details(raceid: int, classid: int, riderid: int):
+    params = {
+        "raceid": raceid,
+        "classid": classid,
+        "riderid": riderid,
+    }
+    query_columns = """
+        sqs.[Group]  AS [group],
+        sqs.[Session] AS session,
+        sqs.Lap      AS lap,
+        sqs.riderid  AS riderid,
+        sqs.Laptime  AS laptime,
+        sqs.SEG_1    AS seg_1,
+        sqs.SEG_2    AS seg_2,
+        sqs.SEG_3    AS seg_3,
+        sqs.SEG_4    AS seg_4,
+        sqs.SEG_5    AS seg_5,
+        sqs.SEG_6    AS seg_6,
+        sqs.SEG_7    AS seg_7,
+        sqs.SEG_8    AS seg_8,
+        sqs.SEG_9    AS seg_9,
+        sqs.SEG_10   AS seg_10
+    """
+
+    rows = fetch_all(f"""
+        SELECT
+            {query_columns}
+        FROM dbo.SX_QUAL_SESSIONS sqs
+        WHERE sqs.raceid = :raceid
+          AND sqs.classid = :classid
+          AND sqs.riderid = :riderid
+          AND sqs.sportid = 1
+        ORDER BY sqs.[Group], sqs.[Session], sqs.Lap
+    """, params)
+
+    rank_rows = fetch_all(f"""
+        SELECT
+            {query_columns}
+        FROM dbo.SX_QUAL_SESSIONS sqs
+        WHERE sqs.raceid = :raceid
+          AND sqs.classid = :classid
+          AND sqs.sportid = 1
+    """, params)
+
+    return _build_qualifying_session_detail(rows, rank_rows, riderid)
 
 
 @router.get("/api/race/main-event")
