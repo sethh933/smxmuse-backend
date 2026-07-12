@@ -221,6 +221,69 @@ def _get_mx_season_moto_qual_from_summary(year: int, classid: int):
     return fetch_all(query, locals())
 
 
+def _add_legacy_mx_qual_starts(results, year: int, classid: int):
+    """Add unique 2004-2008 qualifying race appearances to season rows."""
+    if not 2004 <= year <= 2008:
+        return results
+
+    query = """
+        WITH QualAppearances AS (
+            SELECT mq.RiderID, mq.FullName, mq.RaceID
+            FROM MX_QUAL mq
+            JOIN Race_Table rt ON rt.RaceID = mq.RaceID
+            WHERE rt.[Year] = :year AND mq.ClassID = :classid
+
+            UNION
+            SELECT q.RiderID, q.FullName, q.RaceID
+            FROM MX_QUAL_RACES q
+            JOIN Race_Table rt ON rt.RaceID = q.RaceID
+            WHERE rt.[Year] = :year AND q.ClassID = :classid
+
+            UNION
+            SELECT q.RiderID, q.FullName, q.RaceID
+            FROM MX_QUAL_OLD_FORMAT q
+            JOIN Race_Table rt ON rt.RaceID = q.RaceID
+            WHERE rt.[Year] = :year AND q.ClassID = :classid
+
+            UNION
+            SELECT c.RiderID, c.FullName, c.RaceID
+            FROM MX_CONSIS_OLD_FORMAT c
+            JOIN Race_Table rt ON rt.RaceID = c.RaceID
+            WHERE rt.[Year] = :year AND c.ClassID = :classid
+        )
+        SELECT RiderID, MAX(FullName) AS FullName,
+               COUNT(DISTINCT RaceID) AS QualStarts
+        FROM QualAppearances
+        GROUP BY RiderID
+    """
+    appearances = fetch_all(query, {"year": year, "classid": classid})
+    appearances_by_rider = {row["RiderID"]: row for row in appearances}
+    merged = []
+
+    for row in results:
+        updated = dict(row)
+        appearance = appearances_by_rider.pop(row["RiderID"], None)
+        if appearance:
+            updated["QualStarts"] = appearance["QualStarts"]
+        merged.append(updated)
+
+    for appearance in appearances_by_rider.values():
+        merged.append({
+            "RiderID": appearance["RiderID"],
+            "FullName": appearance["FullName"],
+            "MotoWins": 0,
+            "MotoPodiums": 0,
+            "BestMoto": None,
+            "AvgMoto": None,
+            "Poles": 0,
+            "QualStarts": appearance["QualStarts"],
+            "AvgQual": None,
+            "ConsiWins": 0,
+        })
+
+    return merged
+
+
 def _get_smx_season_overall_from_summary(year: int, classid: int):
     query = """
         SELECT
@@ -1039,7 +1102,7 @@ ORDER BY Points DESC
 def get_mx_season_moto_qual(year: int, classid: int):
     summary_results = _get_mx_season_moto_qual_from_summary(year, classid)
     if summary_results:
-        return summary_results
+        return _add_legacy_mx_qual_starts(summary_results, year, classid)
 
     query = """
     WITH HasQual AS (
@@ -1201,7 +1264,8 @@ def get_mx_season_laps_led(year: int, classid: int):
     ORDER BY r.LapsLed DESC
     """
 
-    return fetch_all(query, locals())
+    results = fetch_all(query, locals())
+    return _add_legacy_mx_qual_starts(results, year, classid)
 
 
 @router.get("/api/smx/season/overall")

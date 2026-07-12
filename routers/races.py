@@ -633,6 +633,136 @@ def get_mx_consi(raceid: int, classid: int):
     return results
 
 
+@router.get("/api/race/legacy-mx-sessions")
+def get_legacy_mx_sessions(raceid: int):
+    """Return 2004-2008 MX qualifying and consi sessions in race-page order."""
+    rows = fetch_all(
+        """
+        WITH LegacySessions AS (
+            SELECT
+                CASE
+                    WHEN q.ClassID = 1 AND q.qualtype = 'prequal' AND q.qual = 1 THEN 1
+                    WHEN q.ClassID = 1 AND q.qualtype = 'prequal' AND q.qual = 2 THEN 2
+                    WHEN q.ClassID = 2 AND q.qualtype = 'prequal' AND q.qual = 1 THEN 3
+                    WHEN q.ClassID = 2 AND q.qualtype = 'prequal' AND q.qual = 2 THEN 4
+                    WHEN q.ClassID = 1 AND q.qualtype = 'qual' AND q.qual = 1 THEN 7
+                    WHEN q.ClassID = 1 AND q.qualtype = 'qual' AND q.qual = 2 THEN 8
+                    WHEN q.ClassID = 2 AND q.qualtype = 'qual' AND q.qual = 1 THEN 9
+                    WHEN q.ClassID = 2 AND q.qualtype = 'qual' AND q.qual = 2 THEN 10
+                END AS SessionOrder,
+                q.ClassID,
+                CASE WHEN q.qualtype = 'prequal' THEN 'Saturday Pre Qualifier'
+                     ELSE 'Sunday Qualifier' END AS SessionName,
+                q.qual AS SessionNumber,
+                q.Result,
+                q.RiderID,
+                COALESCE(rl.FullName, q.FullName) AS FullName,
+                q.Brand,
+                q.Interval
+            FROM MX_QUAL_RACES q
+            LEFT JOIN Rider_List rl ON rl.RiderID = q.RiderID
+            WHERE q.RaceID = :raceid
+              AND q.ClassID IN (1, 2)
+              AND q.qualtype IN ('prequal', 'qual')
+              AND q.qual IN (1, 2)
+
+            UNION ALL
+
+            SELECT
+                CASE
+                    WHEN c.ClassID = 1 AND c.consitype = 'prequal' THEN 5
+                    WHEN c.ClassID = 2 AND c.consitype = 'prequal' THEN 6
+                    WHEN c.ClassID = 1 AND c.consitype = 'qual' THEN 11
+                    WHEN c.ClassID = 2 AND c.consitype = 'qual' THEN 12
+                END,
+                c.ClassID,
+                CASE WHEN c.consitype = 'prequal' THEN 'Saturday Consi'
+                     ELSE 'Sunday Consi' END,
+                NULL,
+                c.Result,
+                c.RiderID,
+                COALESCE(rl.FullName, c.FullName),
+                c.Brand,
+                c.Interval
+            FROM MX_CONSIS_OLD_FORMAT c
+            LEFT JOIN Rider_List rl ON rl.RiderID = c.RiderID
+            WHERE c.RaceID = :raceid
+              AND c.ClassID IN (1, 2)
+              AND c.consitype IN ('prequal', 'qual')
+
+            UNION ALL
+
+            SELECT
+                CASE
+                    WHEN q.ClassID = 1 AND q.[Day] = 'Saturday' THEN 1
+                    WHEN q.ClassID = 1 AND q.[Day] = 'Sunday' THEN 3
+                    WHEN q.ClassID = 2 AND q.[Day] = 'Saturday' THEN 4
+                    WHEN q.ClassID = 2 AND q.[Day] = 'Sunday' THEN 6
+                END,
+                q.ClassID,
+                CASE WHEN q.[Day] = 'Saturday' THEN 'Saturday Timed Qualifying'
+                     ELSE 'Sunday Timed Qualifying' END,
+                NULL,
+                q.Result,
+                q.RiderID,
+                COALESCE(rl.FullName, q.FullName),
+                q.Brand,
+                q.BestLap
+            FROM MX_QUAL_OLD_FORMAT q
+            LEFT JOIN Rider_List rl ON rl.RiderID = q.RiderID
+            WHERE q.RaceID = :raceid
+              AND q.ClassID IN (1, 2)
+              AND q.[Day] IN ('Saturday', 'Sunday')
+
+            UNION ALL
+
+            SELECT
+                CASE WHEN c.ClassID = 1 THEN 2 ELSE 5 END,
+                c.ClassID,
+                'Consolation Race',
+                NULL,
+                c.Result,
+                c.RiderID,
+                COALESCE(rl.FullName, c.FullName),
+                c.Brand,
+                c.Interval
+            FROM MX_CONSIS_OLD_FORMAT c
+            LEFT JOIN Rider_List rl ON rl.RiderID = c.RiderID
+            WHERE c.RaceID = :raceid
+              AND c.ClassID IN (1, 2)
+              AND c.consitype = 'timedqual'
+        )
+        SELECT SessionOrder, ClassID, SessionName, SessionNumber,
+               Result, RiderID, FullName, Brand, Interval
+        FROM LegacySessions
+        WHERE SessionOrder IS NOT NULL
+        ORDER BY SessionOrder, Result
+        """,
+        {"raceid": raceid},
+    )
+
+    sessions = []
+    for row in rows:
+        if not sessions or sessions[-1]["session_order"] != row["SessionOrder"]:
+            class_name = "450" if row["ClassID"] == 1 else "250"
+            number = f" {row['SessionNumber']}" if row["SessionNumber"] is not None else ""
+            sessions.append({
+                "session_order": row["SessionOrder"],
+                "title": f"{class_name} {row['SessionName']}{number}",
+                "results": [],
+            })
+
+        sessions[-1]["results"].append({
+            "result": row["Result"],
+            "riderid": row["RiderID"],
+            "fullname": row["FullName"],
+            "brand": row["Brand"],
+            "interval": row["Interval"],
+        })
+
+    return sessions
+
+
 @router.get("/api/race/smx-wildcard")
 def get_smx_wildcard(raceid: int, classid: int):
     with pyodbc.connect(CONN_STR) as conn:

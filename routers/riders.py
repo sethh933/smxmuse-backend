@@ -52,10 +52,25 @@ def _get_rider_identity_and_availability(cursor, rider_id: int):
         )
         availability = cursor.fetchone()
         if availability:
+            cursor.execute(
+                """
+                SELECT CASE WHEN EXISTS (
+                    SELECT RiderID FROM MX_CONSIS_OLD_FORMAT WHERE RiderID = ?
+                    UNION ALL
+                    SELECT RiderID FROM MX_QUAL_OLD_FORMAT WHERE RiderID = ?
+                    UNION ALL
+                    SELECT RiderID FROM MX_QUAL_RACES WHERE RiderID = ?
+                ) THEN 1 ELSE 0 END
+                """,
+                rider_id,
+                rider_id,
+                rider_id,
+            )
+            has_legacy_mx = cursor.fetchone()[0] == 1
             return (
                 rider_data,
                 availability.HasSX == 1,
-                availability.HasMX == 1,
+                availability.HasMX == 1 or has_legacy_mx,
                 availability.HasSMX == 1,
             )
     except pyodbc.Error:
@@ -83,6 +98,12 @@ def _get_rider_identity_and_availability(cursor, rider_id: int):
                     SELECT RiderID FROM MX_CONSIS
                     UNION
                     SELECT RiderID FROM MX_QUAL
+                    UNION
+                    SELECT RiderID FROM MX_CONSIS_OLD_FORMAT
+                    UNION
+                    SELECT RiderID FROM MX_QUAL_OLD_FORMAT
+                    UNION
+                    SELECT RiderID FROM MX_QUAL_RACES
                 ) x
                 WHERE RiderID = ?
             ) THEN 1 ELSE 0 END AS HasMX,
@@ -636,6 +657,76 @@ def _get_rider_race_results_from_summary(cursor, rider_id: int):
         return None
 
     return results
+
+
+def _get_legacy_mx_race_result_rows(cursor, rider_id: int):
+    """Create placeholder career-result rows for 2004-2008 MX qualifiers."""
+    cursor.execute(
+        """
+        WITH LegacyAppearances AS (
+            SELECT RaceID, ClassID, Brand
+            FROM MX_QUAL_RACES
+            WHERE RiderID = ?
+
+            UNION ALL
+
+            SELECT RaceID, ClassID, Brand
+            FROM MX_QUAL_OLD_FORMAT
+            WHERE RiderID = ?
+
+            UNION ALL
+
+            SELECT RaceID, ClassID, Brand
+            FROM MX_CONSIS_OLD_FORMAT
+            WHERE RiderID = ?
+        ),
+        AppearanceRows AS (
+            SELECT RaceID, ClassID, MAX(Brand) AS Brand
+            FROM LegacyAppearances
+            GROUP BY RaceID, ClassID
+        )
+        SELECT
+            '-' AS Result,
+            rt.RaceID,
+            rt.TrackID,
+            rt.TrackName,
+            rt.RaceDate,
+            tt.City,
+            CASE
+                WHEN a.ClassID = 1 THEN '450MX'
+                WHEN a.ClassID = 2 THEN '250MX'
+                WHEN a.ClassID = 3 THEN '500MX'
+                ELSE '-'
+            END AS Class,
+            COALESCE(a.Brand, '-') AS Brand,
+            '-' AS QualResult,
+            '-' AS HeatResult,
+            '-' AS LCQResult,
+            'MX' AS Discipline
+        FROM AppearanceRows a
+        JOIN Race_Table rt ON rt.RaceID = a.RaceID
+        LEFT JOIN TrackTable tt ON tt.TrackID = rt.TrackID
+        WHERE rt.[Year] BETWEEN 2004 AND 2008
+          AND rt.SportID = 2
+        ORDER BY rt.RaceDate DESC, rt.RaceID DESC
+        """,
+        rider_id,
+        rider_id,
+        rider_id,
+    )
+    columns = [column[0] for column in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
+def _merge_legacy_mx_race_results(results, legacy_results):
+    existing = {(row["RaceID"], row["Class"]) for row in results}
+    merged = list(results)
+    merged.extend(
+        row for row in legacy_results
+        if (row["RaceID"], row["Class"]) not in existing
+    )
+    merged.sort(key=lambda row: (row["RaceDate"], row["RaceID"]), reverse=True)
+    return merged
 
 
 def _get_smx_race_results(cursor, rider_id: int):
@@ -1878,6 +1969,99 @@ ORDER BY
     return {"smx_stats": smx_stats, "smx_qual_stats": smx_qual_stats}
 
 
+def _get_mx_legacy_qual_stats(cursor, rider_id: int):
+    """Aggregate the 2004-2008 qualifying formats into profile-friendly rows."""
+    cursor.execute(
+        """
+WITH LegacyResults AS (
+    SELECT r.[Year], q.classid AS ClassID, q.Brand, q.raceid AS RaceID,
+           q.Result, CAST(CASE
+               WHEN LOWER(LTRIM(RTRIM(q.qualtype))) = 'prequal' THEN 'SaturdayPreQual'
+               WHEN LOWER(LTRIM(RTRIM(q.qualtype))) = 'qual' THEN 'SundayQual'
+               ELSE 'Appearance'
+           END AS varchar(20)) AS ResultType
+    FROM MX_QUAL_RACES q
+    JOIN Race_Table r ON r.RaceID = q.raceid
+    WHERE q.riderid = ?
+
+    UNION ALL
+    SELECT r.[Year], c.classid, c.Brand, c.raceid, c.Result, CASE
+               WHEN LOWER(LTRIM(RTRIM(c.consitype))) = 'prequal' THEN 'FirstConsi'
+               WHEN LOWER(LTRIM(RTRIM(c.consitype))) = 'timedqual' THEN 'FinalConsi'
+               ELSE 'Appearance'
+           END
+    FROM MX_CONSIS_OLD_FORMAT c
+    JOIN Race_Table r ON r.RaceID = c.raceid
+    WHERE c.riderid = ?
+
+    UNION ALL
+    SELECT r.[Year], q.classid, q.Brand, q.raceid, q.Result, CASE
+               WHEN LOWER(LTRIM(RTRIM(q.[Day]))) = 'sunday' THEN 'Fast40Qual'
+               ELSE 'Appearance'
+           END
+    FROM MX_QUAL_OLD_FORMAT q
+    JOIN Race_Table r ON r.RaceID = q.raceid
+    WHERE q.riderid = ?
+),
+Yearly AS (
+    SELECT [Year], ClassID, Brand,
+        COUNT(DISTINCT RaceID) AS QualAppearances,
+        CAST(ROUND(AVG(CASE WHEN ResultType = 'SaturdayPreQual' THEN CAST(Result AS float) END), 2) AS decimal(10,2)) AS AvgSaturdayPreQual,
+        MIN(CASE WHEN ResultType = 'SaturdayPreQual' THEN Result END) AS BestPreQual,
+        CAST(ROUND(AVG(CASE WHEN ResultType = 'FirstConsi' THEN CAST(Result AS float) END), 2) AS decimal(10,2)) AS AvgFirstConsi,
+        CAST(ROUND(AVG(CASE WHEN ResultType = 'SundayQual' THEN CAST(Result AS float) END), 2) AS decimal(10,2)) AS AvgSundayQual,
+        MIN(CASE WHEN ResultType = 'SundayQual' THEN Result END) AS BestSundayQual,
+        CAST(ROUND(AVG(CASE WHEN ResultType = 'FinalConsi' THEN CAST(Result AS float) END), 2) AS decimal(10,2)) AS AvgFinalConsi,
+        MIN(CASE WHEN ResultType = 'FinalConsi' THEN Result END) AS BestConsi,
+        CAST(ROUND(AVG(CASE WHEN ResultType = 'Fast40Qual' THEN CAST(Result AS float) END), 2) AS decimal(10,2)) AS AvgFast40Qual,
+        MIN(CASE WHEN ResultType = 'Fast40Qual' THEN Result END) AS BestFast40Qual
+    FROM LegacyResults
+    GROUP BY [Year], ClassID, Brand
+),
+Career AS (
+    SELECT NULL AS [Year], ClassID, NULL AS Brand,
+        COUNT(DISTINCT RaceID) AS QualAppearances,
+        CAST(ROUND(AVG(CASE WHEN ResultType = 'SaturdayPreQual' THEN CAST(Result AS float) END), 2) AS decimal(10,2)) AS AvgSaturdayPreQual,
+        MIN(CASE WHEN ResultType = 'SaturdayPreQual' THEN Result END) AS BestPreQual,
+        CAST(ROUND(AVG(CASE WHEN ResultType = 'FirstConsi' THEN CAST(Result AS float) END), 2) AS decimal(10,2)) AS AvgFirstConsi,
+        CAST(ROUND(AVG(CASE WHEN ResultType = 'SundayQual' THEN CAST(Result AS float) END), 2) AS decimal(10,2)) AS AvgSundayQual,
+        MIN(CASE WHEN ResultType = 'SundayQual' THEN Result END) AS BestSundayQual,
+        CAST(ROUND(AVG(CASE WHEN ResultType = 'FinalConsi' THEN CAST(Result AS float) END), 2) AS decimal(10,2)) AS AvgFinalConsi,
+        MIN(CASE WHEN ResultType = 'FinalConsi' THEN Result END) AS BestConsi,
+        CAST(ROUND(AVG(CASE WHEN ResultType = 'Fast40Qual' THEN CAST(Result AS float) END), 2) AS decimal(10,2)) AS AvgFast40Qual,
+        MIN(CASE WHEN ResultType = 'Fast40Qual' THEN Result END) AS BestFast40Qual
+    FROM LegacyResults GROUP BY ClassID
+    UNION ALL
+    SELECT NULL, 0, NULL, COUNT(DISTINCT RaceID),
+        CAST(ROUND(AVG(CASE WHEN ResultType = 'SaturdayPreQual' THEN CAST(Result AS float) END), 2) AS decimal(10,2)),
+        MIN(CASE WHEN ResultType = 'SaturdayPreQual' THEN Result END),
+        CAST(ROUND(AVG(CASE WHEN ResultType = 'FirstConsi' THEN CAST(Result AS float) END), 2) AS decimal(10,2)),
+        CAST(ROUND(AVG(CASE WHEN ResultType = 'SundayQual' THEN CAST(Result AS float) END), 2) AS decimal(10,2)),
+        MIN(CASE WHEN ResultType = 'SundayQual' THEN Result END),
+        CAST(ROUND(AVG(CASE WHEN ResultType = 'FinalConsi' THEN CAST(Result AS float) END), 2) AS decimal(10,2)),
+        MIN(CASE WHEN ResultType = 'FinalConsi' THEN Result END),
+        CAST(ROUND(AVG(CASE WHEN ResultType = 'Fast40Qual' THEN CAST(Result AS float) END), 2) AS decimal(10,2)),
+        MIN(CASE WHEN ResultType = 'Fast40Qual' THEN Result END)
+    FROM LegacyResults
+    HAVING COUNT(*) > 0
+)
+SELECT [Year], ClassID,
+    CASE WHEN ClassID = 1 THEN '450' WHEN ClassID = 2 THEN '250' WHEN ClassID = 3 THEN '500' END AS Class,
+    Brand, QualAppearances, AvgSaturdayPreQual, BestPreQual, AvgFirstConsi,
+    AvgSundayQual, BestSundayQual, AvgFinalConsi, BestConsi, AvgFast40Qual, BestFast40Qual
+FROM (SELECT * FROM Yearly UNION ALL SELECT * FROM Career) x
+ORDER BY CASE WHEN [Year] IS NULL THEN 1 ELSE 0 END, [Year],
+    CASE WHEN [Year] IS NULL THEN CASE ClassID WHEN 2 THEN 1 WHEN 1 THEN 2 WHEN 3 THEN 3 WHEN 0 THEN 4 ELSE 9 END ELSE ClassID END,
+    Brand
+        """,
+        rider_id,
+        rider_id,
+        rider_id,
+    )
+    columns = [col[0] for col in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
 @router.get("/rider/{rider_id}/profile")
 def get_rider_profile(rider_id: int, sport: str = "SX"):
     try:
@@ -1899,6 +2083,7 @@ def get_rider_profile(rider_id: int, sport: str = "SX"):
                     payload = _get_mx_profile_payload(cursor, rider_id)
                 if payload is None:
                     payload = {"mx_stats": [], "mx_qual_stats": []}
+                payload["mx_legacy_qual_stats"] = _get_mx_legacy_qual_stats(cursor, rider_id)
             else:
                 payload = _get_sx_profile_payload_from_summary(cursor, rider_id)
                 if payload is None and has_sx:
@@ -2324,7 +2509,10 @@ def get_rider_race_results(rider_id: int):
             if summary_results is not None:
                 if not any(row.get("Discipline") == "SMX" for row in summary_results):
                     summary_results.extend(_get_smx_race_results(cursor, rider_id))
-                    summary_results.sort(key=lambda row: (row["RaceDate"], row["RaceID"]), reverse=True)
+                summary_results = _merge_legacy_mx_race_results(
+                    summary_results,
+                    _get_legacy_mx_race_result_rows(cursor, rider_id),
+                )
                 return {"rider": rider_data, "results": summary_results}
 
             cursor.execute(
@@ -2502,6 +2690,10 @@ ORDER BY RaceDate DESC
 
             columns = [column[0] for column in cursor.description]
             results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            results = _merge_legacy_mx_race_results(
+                results,
+                _get_legacy_mx_race_result_rows(cursor, rider_id),
+            )
 
             return {"rider": rider_data, "results": results}
 
