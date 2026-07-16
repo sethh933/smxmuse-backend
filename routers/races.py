@@ -65,8 +65,15 @@ def _build_lap_segment_detail(rows, rank_rows, riderid: int):
     rider_lap_seconds = {}
     rider_segment_bests = {}
     rider_segment_seconds = {}
+    average_consistency_rank_eligible = {}
 
     for row in rank_rows:
+        rank_riderid = row.get("riderid")
+        race_status = row.get("race_status")
+        average_consistency_rank_eligible[rank_riderid] = (
+            not isinstance(race_status, str)
+            or race_status.strip().upper() != "DNF"
+        )
         seconds = _lap_time_to_seconds(row.get("laptime"))
 
         if seconds is not None:
@@ -115,6 +122,7 @@ def _build_lap_segment_detail(rows, rank_rows, riderid: int):
         }
         for rank_riderid, rank_lap_seconds in rider_lap_seconds.items()
         if rank_lap_seconds
+        and average_consistency_rank_eligible.get(rank_riderid, True)
     ]
     previous_average_seconds = None
     current_average_rank = 0
@@ -136,6 +144,7 @@ def _build_lap_segment_detail(rows, rank_rows, riderid: int):
         }
         for rank_riderid, rank_lap_seconds in rider_lap_seconds.items()
         if rank_lap_seconds
+        and average_consistency_rank_eligible.get(rank_riderid, True)
     ]
     previous_consistency_seconds = None
     current_consistency_rank = 0
@@ -584,6 +593,7 @@ def get_mx_moto_rider_details(raceid: int, classid: int, moto: int, riderid: int
             mms.LAP     AS lap,
             mms.riderid AS riderid,
             mms.LAPTIME AS laptime,
+            mm.RaceStatus AS race_status,
             mms.SEG_1   AS seg_1,
             mms.SEG_2   AS seg_2,
             mms.SEG_3   AS seg_3,
@@ -595,6 +605,12 @@ def get_mx_moto_rider_details(raceid: int, classid: int, moto: int, riderid: int
             mms.SEG_9   AS seg_9,
             mms.SEG_10  AS seg_10
         FROM dbo.MX_MOTO_SEGMENTS mms
+        LEFT JOIN dbo.MX_MOTOS mm
+          ON mm.raceid = mms.raceid
+         AND mm.classid = mms.classid
+         AND mm.Moto = mms.Moto
+         AND mm.riderid = mms.riderid
+         AND mm.sportid = mms.sportid
         WHERE mms.raceid = :raceid
           AND mms.classid = :classid
           AND mms.Moto = :moto
