@@ -468,14 +468,15 @@ def get_mx_overalls(raceid: int, classid: int, sport_id: int = 2):
                 mo.Holeshot,
                 mo.M1_Start,
                 mo.M2_Start,
-                rl.ImageURL
+                rl.ImageURL,
+                rl.Country
             FROM {overall_table} mo
             LEFT JOIN Rider_List rl
                 ON rl.RiderID = mo.RiderID
             WHERE mo.raceid = ?
             AND mo.classid = ?
             AND mo.{sport_column} = ?
-            ORDER BY Result
+            ORDER BY CASE WHEN mo.Result IS NULL THEN 1 ELSE 0 END, mo.Result
         """.format(overall_table=overall_table, sport_column=sport_column), raceid, classid, sport_id)
 
         columns = [column[0].lower() for column in cursor.description]
@@ -503,7 +504,9 @@ def get_smx_motos(raceid: int, classid: int, moto: int):
                 sm.BestLap AS BestLap,
                 sm.Start AS Start,
                 sm.Holeshot AS Holeshot,
-                sm.RaceStatus AS RaceStatus
+                sm.RaceStatus AS RaceStatus,
+                rl.ImageURL AS ImageURL,
+                rl.Country AS Country
             FROM SMX_MOTOS sm
             LEFT JOIN Rider_List rl
                 ON rl.RiderID = sm.RiderID
@@ -511,7 +514,7 @@ def get_smx_motos(raceid: int, classid: int, moto: int):
               AND sm.classid = ?
               AND sm.Moto = ?
               AND sm.sportid = 3
-            ORDER BY sm.Result
+            ORDER BY CASE WHEN sm.Result IS NULL THEN 1 ELSE 0 END, sm.Result
         """, raceid, classid, moto)
 
         columns = [column[0].lower() for column in cursor.description]
@@ -537,7 +540,9 @@ def get_mx_motos(raceid: int, classid: int, moto: int):
                 mm.BestLap AS BestLap,
                 mm.Start AS Start,
                 mm.Holeshot AS Holeshot,
-                mm.RaceStatus AS RaceStatus
+                mm.RaceStatus AS RaceStatus,
+                rl.ImageURL AS ImageURL,
+                rl.Country AS Country
             FROM MX_MOTOS mm
             LEFT JOIN Rider_List rl
                 ON rl.RiderID = mm.RiderID
@@ -545,7 +550,7 @@ def get_mx_motos(raceid: int, classid: int, moto: int):
               AND mm.classid = ?
               AND mm.Moto = ?
               AND mm.sportid = 2
-            ORDER BY mm.Result
+            ORDER BY CASE WHEN mm.Result IS NULL THEN 1 ELSE 0 END, mm.Result
         """, raceid, classid, moto)
 
         columns = [column[0].lower() for column in cursor.description]
@@ -630,13 +635,15 @@ def get_mx_consi(raceid: int, classid: int):
                 mc.Result AS Result,
                 mc.riderid AS riderid,
                 COALESCE(rl.FullName, mc.FullName) AS FullName,
-                mc.Brand AS Brand
+                mc.Brand AS Brand,
+                rl.ImageURL AS ImageURL,
+                rl.Country AS Country
             FROM MX_CONSIS mc
             LEFT JOIN Rider_List rl
                 ON rl.RiderID = mc.RiderID
             WHERE mc.raceid = ?
             AND mc.classid = ?
-            ORDER BY mc.Result
+            ORDER BY CASE WHEN mc.Result IS NULL THEN 1 ELSE 0 END, mc.Result
         """, raceid, classid)
 
         columns = [column[0].lower() for column in cursor.description]
@@ -674,7 +681,9 @@ def get_legacy_mx_sessions(raceid: int):
                 q.RiderID,
                 COALESCE(rl.FullName, q.FullName) AS FullName,
                 q.Brand,
-                q.Interval
+                q.Interval,
+                rl.ImageURL,
+                rl.Country
             FROM MX_QUAL_RACES q
             LEFT JOIN Rider_List rl ON rl.RiderID = q.RiderID
             WHERE q.RaceID = :raceid
@@ -699,7 +708,9 @@ def get_legacy_mx_sessions(raceid: int):
                 c.RiderID,
                 COALESCE(rl.FullName, c.FullName),
                 c.Brand,
-                c.Interval
+                c.Interval,
+                rl.ImageURL,
+                rl.Country
             FROM MX_CONSIS_OLD_FORMAT c
             LEFT JOIN Rider_List rl ON rl.RiderID = c.RiderID
             WHERE c.RaceID = :raceid
@@ -723,7 +734,9 @@ def get_legacy_mx_sessions(raceid: int):
                 q.RiderID,
                 COALESCE(rl.FullName, q.FullName),
                 q.Brand,
-                q.BestLap
+                q.BestLap,
+                rl.ImageURL,
+                rl.Country
             FROM MX_QUAL_OLD_FORMAT q
             LEFT JOIN Rider_List rl ON rl.RiderID = q.RiderID
             WHERE q.RaceID = :raceid
@@ -741,7 +754,9 @@ def get_legacy_mx_sessions(raceid: int):
                 c.RiderID,
                 COALESCE(rl.FullName, c.FullName),
                 c.Brand,
-                c.Interval
+                c.Interval,
+                rl.ImageURL,
+                rl.Country
             FROM MX_CONSIS_OLD_FORMAT c
             LEFT JOIN Rider_List rl ON rl.RiderID = c.RiderID
             WHERE c.RaceID = :raceid
@@ -749,10 +764,10 @@ def get_legacy_mx_sessions(raceid: int):
               AND c.consitype = 'timedqual'
         )
         SELECT SessionOrder, ClassID, SessionName, SessionNumber,
-               Result, RiderID, FullName, Brand, Interval
+               Result, RiderID, FullName, Brand, Interval, ImageURL, Country
         FROM LegacySessions
         WHERE SessionOrder IS NOT NULL
-        ORDER BY SessionOrder, Result
+        ORDER BY SessionOrder, CASE WHEN Result IS NULL THEN 1 ELSE 0 END, Result
         """,
         {"raceid": raceid},
     )
@@ -774,6 +789,8 @@ def get_legacy_mx_sessions(raceid: int):
             "fullname": row["FullName"],
             "brand": row["Brand"],
             "interval": row["Interval"],
+            "imageurl": row["ImageURL"],
+            "country": row["Country"],
         })
 
     return sessions
@@ -789,14 +806,16 @@ def get_smx_wildcard(raceid: int, classid: int):
                 sl.Result AS Result,
                 sl.riderid AS riderid,
                 COALESCE(rl.FullName, sl.FullName) AS FullName,
-                sl.Brand AS Brand
+                sl.Brand AS Brand,
+                rl.ImageURL AS ImageURL,
+                rl.Country AS Country
             FROM SMX_LCQS sl
             LEFT JOIN Rider_List rl
                 ON rl.RiderID = sl.RiderID
             WHERE sl.raceid = ?
               AND sl.classid = ?
               AND sl.sportid = 3
-            ORDER BY sl.Result
+            ORDER BY CASE WHEN sl.Result IS NULL THEN 1 ELSE 0 END, sl.Result
         """, raceid, classid)
 
         columns = [column[0].lower() for column in cursor.description]
@@ -815,13 +834,15 @@ def get_supercross_lcqs(raceid: int, classid: int):
             sxl.riderid     AS riderid,
             COALESCE(rl.FullName, sxl.FullName) AS fullname,
             sxl.Brand       AS brand,
-            sxl.RiderCoastID AS ridercoastid
+            sxl.RiderCoastID AS ridercoastid,
+            rl.ImageURL AS imageurl,
+            rl.Country AS country
         FROM SX_LCQS sxl
         LEFT JOIN Rider_List rl
             ON rl.RiderID = sxl.RiderID
         WHERE sxl.RaceID = :raceid
           AND sxl.ClassID = :classid
-        ORDER BY sxl.Result
+        ORDER BY CASE WHEN sxl.Result IS NULL THEN 1 ELSE 0 END, sxl.Result
     """
 
     return fetch_all(query, {"raceid": raceid, "classid": classid})
@@ -839,13 +860,15 @@ def get_qualifying(raceid: int, classid: int, sport_id: int):
                     sxq.Brand       AS brand,
                     sxq.Best_Lap    AS best_lap,
                     sxq.RiderCoastID AS ridercoastid,
-                    sxq.coastid     AS coastid
+                    sxq.coastid     AS coastid,
+                    rl.ImageURL     AS imageurl,
+                    rl.Country      AS country
                 FROM SX_QUAL sxq
                 LEFT JOIN Rider_List rl
                     ON rl.RiderID = sxq.RiderID
                 WHERE sxq.RaceID = :raceid
                   AND sxq.ClassID = :classid
-                ORDER BY sxq.Result
+                ORDER BY CASE WHEN sxq.Result IS NULL THEN 1 ELSE 0 END, sxq.Result
             """
 
             return fetch_all(query, {
@@ -865,14 +888,16 @@ def get_qualifying(raceid: int, classid: int, sport_id: int):
                     mq.riderid AS riderid,
                     COALESCE(rl.FullName, mq.FullName) AS FullName,
                     mq.Brand AS Brand,
-                    mq.Best_Lap AS Best_Lap
+                    mq.Best_Lap AS Best_Lap,
+                    rl.ImageURL AS ImageURL,
+                    rl.Country AS Country
                 FROM {qual_table} mq
                 LEFT JOIN Rider_List rl
                     ON rl.RiderID = mq.RiderID
                 WHERE mq.raceid = ?
                   AND mq.classid = ?
                   AND mq.{sport_column} = ?
-                ORDER BY mq.Result
+                ORDER BY CASE WHEN mq.Result IS NULL THEN 1 ELSE 0 END, mq.Result
             """.format(qual_table=qual_table, sport_column=sport_column), raceid, classid, sport_id)
 
             columns = [column[0].lower() for column in cursor.description]
@@ -1002,12 +1027,13 @@ def get_supercross_main_event(raceid: int):
             sx.TC3                 AS tc3,
             sx.RiderCoastID        AS ridercoastid,
             sx.coastid             AS coastid,
-            rl.ImageURL            AS imageurl
+            rl.ImageURL            AS imageurl,
+            rl.Country             AS country
         FROM SX_MAINS sx
         LEFT JOIN Rider_List rl
             ON rl.RiderID = sx.RiderID
         WHERE sx.RaceID = :raceid
-        ORDER BY ClassID, Result
+        ORDER BY ClassID, CASE WHEN sx.Result IS NULL THEN 1 ELSE 0 END, sx.Result
     """
 
     rows = fetch_all(query, {"raceid": raceid})
@@ -1045,12 +1071,13 @@ def get_supercross_triple_crown_mains(raceid: int):
             tc.[Start]             AS Lap1Pos,
             tc.RiderCoastID        AS ridercoastid,
             tc.coastid             AS coastid,
-            rl.ImageURL            AS imageurl
+            rl.ImageURL            AS imageurl,
+            rl.Country             AS country
         FROM TC_MAINS tc
         LEFT JOIN Rider_List rl
             ON rl.RiderID = tc.RiderID
         WHERE tc.raceid = :raceid
-        ORDER BY tc.classid, tc.main, tc.Result
+        ORDER BY tc.classid, tc.main, CASE WHEN tc.Result IS NULL THEN 1 ELSE 0 END, tc.Result
     """
 
     rows = fetch_all(query, {"raceid": raceid})
@@ -1152,13 +1179,15 @@ def get_supercross_heats(raceid: int, classid: int):
             COALESCE(rl.FullName, sxh.FullName) AS fullname,
             sxh.Brand       AS brand,
             sxh.RiderCoastID AS ridercoastid,
-            sxh.coastid     AS coastid
+            sxh.coastid     AS coastid,
+            rl.ImageURL     AS imageurl,
+            rl.Country      AS country
         FROM SX_HEATS sxh
         LEFT JOIN Rider_List rl
             ON rl.RiderID = sxh.RiderID
         WHERE sxh.RaceID = :raceid
           AND sxh.ClassID = :classid
-        ORDER BY sxh.Heat, sxh.Result
+        ORDER BY sxh.Heat, CASE WHEN sxh.Result IS NULL THEN 1 ELSE 0 END, sxh.Result
     """
 
     rows = fetch_all(query, {"raceid": raceid, "classid": classid})
