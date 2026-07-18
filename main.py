@@ -9,6 +9,7 @@ from routers.notes import router as notes_router
 from routers.races import router as races_router
 from routers.riders import router as riders_router
 from routers.search import router as search_router
+from routers.seo import router as seo_router
 from routers.seasons import router as seasons_router
 from routers.tracks import router as tracks_router
 
@@ -38,3 +39,4 @@ app.include_router(comparisons_router)
 app.include_router(riders_router)
 app.include_router(notes_router)
 app.include_router(admin_router)
+app.include_router(seo_router)
