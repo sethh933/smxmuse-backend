@@ -75,8 +75,26 @@ def build_prerender_manifest():
     """Return lightweight, route-specific HTML data for the frontend build."""
     with engine.connect() as conn:
         riders = conn.execute(text("""
-            SELECT rl.RiderID, rl.FullName, rl.Country, rl.ImageURL
+            WITH Appearances AS (
+                SELECT RiderID, RaceID FROM dbo.SX_MAINS
+                UNION ALL SELECT RiderID, RaceID FROM dbo.MX_OVERALLS
+                UNION ALL SELECT RiderID, RaceID FROM dbo.SMX_OVERALLS
+            ),
+            RiderActivity AS (
+                SELECT RiderID, COUNT(*) AS AppearanceCount, MAX(RaceID) AS LatestRaceID
+                FROM Appearances
+                GROUP BY RiderID
+            ),
+            RankedRiders AS (
+                SELECT RiderID,
+                       ROW_NUMBER() OVER (ORDER BY AppearanceCount DESC, RiderID DESC) AS CareerRank,
+                       ROW_NUMBER() OVER (ORDER BY LatestRaceID DESC, RiderID DESC) AS RecentRank
+                FROM RiderActivity
+            )
+            SELECT rl.RiderID, rl.FullName, rl.Country, rl.ImageURL,
+                   ranked.CareerRank, ranked.RecentRank
             FROM dbo.Rider_List rl
+            INNER JOIN RankedRiders ranked ON ranked.RiderID = rl.RiderID
             WHERE rl.FullName IS NOT NULL
               AND LTRIM(RTRIM(rl.FullName)) <> ''
               AND EXISTS (
@@ -89,7 +107,8 @@ def build_prerender_manifest():
 
         races = conn.execute(text("""
             SELECT rt.RaceID, rt.[Year], rt.Round, rt.TrackName, rt.SportID,
-                   rt.RaceDate, tt.City
+                   rt.RaceDate, tt.City,
+                   ROW_NUMBER() OVER (ORDER BY rt.RaceDate DESC, rt.RaceID DESC) AS PrerenderRank
             FROM dbo.Race_Table rt
             LEFT JOIN dbo.TrackTable tt ON tt.TrackID = rt.TrackID
             WHERE rt.SportID IN (1, 2, 3)
@@ -156,6 +175,11 @@ def build_prerender_manifest():
     ]
 
     for rider in riders:
+        # Azure Static Web Apps currently has unreliable production distribution
+        # with large directory counts. Keep both the all-time leaders and the
+        # most recently active riders in the static prerender set.
+        if int(rider["CareerRank"]) > 600 and int(rider["RecentRank"]) > 350:
+            continue
         name = rider["FullName"].strip()
         slug = _slugify(name)
         path = f"/rider/{slug}-{rider['RiderID']}" if slug else f"/rider/{rider['RiderID']}"
@@ -168,6 +192,8 @@ def build_prerender_manifest():
         pages.append(_page(path, f"{name} Rider Profile and Career Stats", description, name, page_type="profile", json_ld=person))
 
     for race in races:
+        if int(race["PrerenderRank"]) > 350:
+            continue
         sport = SPORT_LABELS[int(race["SportID"])]
         display_name = race["City"] if int(race["SportID"]) == 1 and race["City"] else race["TrackName"]
         slug = _slugify(f"{display_name} {race['Year']}")
