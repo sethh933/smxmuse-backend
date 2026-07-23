@@ -165,9 +165,13 @@ def _get_wmx_profile_payload(cursor, rider_id: int):
                 CAST(ROUND(100.0 * SUM(CASE WHEN o.Result = 1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS DECIMAL(10,2)) AS WinPct,
                 SUM(COALESCE(CAST(o.LapsLed AS INT), COALESCE(CAST(o.M1_Laps_Led AS INT), 0) + COALESCE(CAST(o.M2_Laps_Led AS INT), 0))) AS LapsLed,
                 SUM(COALESCE(CAST(o.Holeshot AS INT), 0)) AS Holeshots,
-                SUM(COALESCE(CAST(o.Points AS INT), 0)) AS TotalPoints
+                MAX(COALESCE(CAST(s.Points AS INT), 0)) AS TotalPoints
             FROM WMX_OVERALLS o
             INNER JOIN Race_Table r ON r.RaceID = o.raceid
+            LEFT JOIN WMX_POINTS_STANDINGS s
+              ON s.RiderID = o.riderid
+             AND s.[Year] = r.[Year]
+             AND s.SportID = 4
             CROSS APPLY (
                 SELECT MIN(v.Result) AS BestMoto
                 FROM (VALUES (o.Moto1), (o.Moto2), (o.Moto3)) v(Result)
@@ -206,7 +210,12 @@ def _get_wmx_profile_payload(cursor, rider_id: int):
                 CAST(ROUND(100.0 * SUM(CASE WHEN o.Result = 1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS DECIMAL(10,2)) AS WinPct,
                 SUM(COALESCE(CAST(o.LapsLed AS INT), COALESCE(CAST(o.M1_Laps_Led AS INT), 0) + COALESCE(CAST(o.M2_Laps_Led AS INT), 0))) AS LapsLed,
                 SUM(COALESCE(CAST(o.Holeshot AS INT), 0)) AS Holeshots,
-                SUM(COALESCE(CAST(o.Points AS INT), 0)) AS TotalPoints
+                (
+                    SELECT SUM(COALESCE(CAST(s.Points AS INT), 0))
+                    FROM WMX_POINTS_STANDINGS s
+                    WHERE s.RiderID = ?
+                      AND s.SportID = 4
+                ) AS TotalPoints
             FROM WMX_OVERALLS o
             CROSS APPLY (
                 SELECT MIN(v.Result) AS BestMoto
@@ -222,6 +231,7 @@ def _get_wmx_profile_payload(cursor, rider_id: int):
         ) final_rows
         ORDER BY CASE WHEN [Year] IS NULL THEN 1 ELSE 0 END, [Year], Brand
         """,
+        rider_id,
         rider_id,
         rider_id,
     )
@@ -1512,6 +1522,21 @@ def _get_mx_profile_payload(cursor, rider_id: int):
     cursor.execute(
         """
 WITH
+mx_year_points AS (
+    SELECT RiderID, [Year], ClassID, MAX(COALESCE(Points, 0)) AS TotalPoints
+    FROM MX_POINTS_STANDINGS
+    GROUP BY RiderID, [Year], ClassID
+),
+mx_career_class_points AS (
+    SELECT RiderID, ClassID, SUM(COALESCE(Points, 0)) AS TotalPoints
+    FROM MX_POINTS_STANDINGS
+    GROUP BY RiderID, ClassID
+),
+mx_career_overall_points AS (
+    SELECT RiderID, SUM(COALESCE(Points, 0)) AS TotalPoints
+    FROM MX_POINTS_STANDINGS
+    GROUP BY RiderID
+),
 overall_year_brand AS (
     SELECT
         r.[Year],
@@ -1565,9 +1590,13 @@ overall_year_brand AS (
               + SUM(CASE WHEN o.M2_Start IS NOT NULL THEN 1 ELSE 0 END),
               0
             ), 2) AS DECIMAL(10,2)) AS AvgStart,
-        SUM(COALESCE(o.Points,0)) AS TotalPoints
+        COALESCE(MAX(yp.TotalPoints), 0) AS TotalPoints
     FROM MX_OVERALLS o
     JOIN Race_Table r ON r.RaceID = o.RaceID
+    LEFT JOIN mx_year_points yp
+      ON yp.RiderID = o.RiderID
+     AND yp.[Year] = r.[Year]
+     AND yp.ClassID = o.ClassID
     WHERE o.RiderID = ?
       AND o.Sport_ID = 2
     GROUP BY r.[Year], o.ClassID, CASE WHEN o.ClassID = 1 THEN '450' WHEN o.ClassID = 2 THEN '250' WHEN o.ClassID = 3 THEN '500' END, o.Brand
@@ -1641,8 +1670,11 @@ overall_career_class AS (
               + SUM(CASE WHEN o.M2_Start IS NOT NULL THEN 1 ELSE 0 END),
               0
             ), 2) AS DECIMAL(10,2)) AS AvgStart,
-        SUM(COALESCE(o.Points,0)) AS TotalPoints
+        COALESCE(MAX(cp.TotalPoints), 0) AS TotalPoints
     FROM MX_OVERALLS o
+    LEFT JOIN mx_career_class_points cp
+      ON cp.RiderID = o.RiderID
+     AND cp.ClassID = o.ClassID
     WHERE o.RiderID = ?
       AND o.Sport_ID = 2
     GROUP BY o.ClassID, CASE WHEN o.ClassID = 1 THEN '450' WHEN o.ClassID = 2 THEN '250' WHEN o.ClassID = 3 THEN '500' END
@@ -1686,8 +1718,10 @@ overall_career_combined AS (
               + SUM(CASE WHEN o.M2_Start IS NOT NULL THEN 1 ELSE 0 END),
               0
             ), 2) AS DECIMAL(10,2)) AS AvgStart,
-        SUM(COALESCE(o.Points,0)) AS TotalPoints
+        COALESCE(MAX(op.TotalPoints), 0) AS TotalPoints
     FROM MX_OVERALLS o
+    LEFT JOIN mx_career_overall_points op
+      ON op.RiderID = o.RiderID
     WHERE o.RiderID = ?
       AND o.Sport_ID = 2
 ),

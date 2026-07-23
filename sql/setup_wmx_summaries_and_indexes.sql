@@ -274,7 +274,24 @@ BEGIN
         SUM(COALESCE(CAST(base.LapsLed AS INT), COALESCE(CAST(base.M1_Laps_Led AS INT), 0) + COALESCE(CAST(base.M2_Laps_Led AS INT), 0))),
         SUM(COALESCE(CAST(base.Holeshot AS INT), 0)),
         CAST(ROUND(AVG(base.AvgStartRace), 2) AS DECIMAL(10,2)),
-        SUM(COALESCE(CAST(base.Points AS INT), 0))
+        COALESCE(
+            CASE
+                WHEN grouping_row.[Year] IS NULL THEN (
+                    SELECT SUM(COALESCE(CAST(standings.Points AS INT), 0))
+                    FROM dbo.WMX_POINTS_STANDINGS standings
+                    WHERE standings.RiderID = grouping_row.RiderID
+                      AND standings.SportID = 4
+                )
+                ELSE (
+                    SELECT MAX(COALESCE(CAST(standings.Points AS INT), 0))
+                    FROM dbo.WMX_POINTS_STANDINGS standings
+                    WHERE standings.RiderID = grouping_row.RiderID
+                      AND standings.[Year] = grouping_row.[Year]
+                      AND standings.SportID = 4
+                )
+            END,
+            0
+        )
     FROM Rollups grouping_row
     JOIN Expanded base
       ON base.RiderID = grouping_row.RiderID
@@ -286,7 +303,7 @@ BEGIN
 
     WITH Base AS (
         SELECT rt.[Year], wo.raceid AS RaceID, wo.riderid AS RiderID,
-               wo.FullName, wo.Brand, wo.Result, wo.Points
+               wo.FullName, wo.Brand, wo.Result
         FROM dbo.WMX_OVERALLS wo
         JOIN dbo.Race_Table rt ON rt.RaceID = wo.raceid
         WHERE rt.SportID = 4
@@ -327,8 +344,7 @@ BEGIN
                SUM(CASE WHEN Result <= 5 THEN 1 ELSE 0 END) AS Top5,
                SUM(CASE WHEN Result <= 10 THEN 1 ELSE 0 END) AS Top10,
                MIN(Result) AS BestOverall,
-               CAST(AVG(CAST(Result AS FLOAT)) AS DECIMAL(10,2)) AS AvgOverall,
-               SUM(COALESCE(Points, 0)) AS Points
+               CAST(AVG(CAST(Result AS FLOAT)) AS DECIMAL(10,2)) AS AvgOverall
         FROM Base
         GROUP BY [Year], RiderID
     )
@@ -339,11 +355,16 @@ BEGIN
     SELECT overall.[Year], 4, overall.RiderID, overall.FullName, overall.Brand,
            overall.Starts, overall.Wins, overall.Podiums, overall.Top5, overall.Top10,
            overall.BestOverall, overall.AvgOverall,
-           COALESCE(session_stats.Holeshots, 0), session_stats.AvgStart, overall.Points
+           COALESCE(session_stats.Holeshots, 0), session_stats.AvgStart,
+           COALESCE(standings.Points, 0)
     FROM OverallStats overall
     LEFT JOIN StartHoleshotStats session_stats
       ON session_stats.[Year] = overall.[Year]
-     AND session_stats.RiderID = overall.RiderID;
+     AND session_stats.RiderID = overall.RiderID
+    LEFT JOIN dbo.WMX_POINTS_STANDINGS standings
+      ON standings.[Year] = overall.[Year]
+     AND standings.SportID = 4
+     AND standings.RiderID = overall.RiderID;
 
     DELETE FROM dbo.SeasonWMXMotoQualSummary;
 

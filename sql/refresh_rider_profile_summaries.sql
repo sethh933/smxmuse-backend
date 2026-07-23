@@ -1992,7 +1992,22 @@ UNION ALL
 SELECT * FROM sx_qual_career_overall_stats;
 GO
 
-WITH overall_year_brand AS (
+WITH mx_year_points AS (
+    SELECT RiderID, [Year], ClassID, MAX(COALESCE(Points, 0)) AS TotalPoints
+    FROM MX_POINTS_STANDINGS
+    GROUP BY RiderID, [Year], ClassID
+),
+mx_career_class_points AS (
+    SELECT RiderID, ClassID, SUM(COALESCE(Points, 0)) AS TotalPoints
+    FROM MX_POINTS_STANDINGS
+    GROUP BY RiderID, ClassID
+),
+mx_career_overall_points AS (
+    SELECT RiderID, SUM(COALESCE(Points, 0)) AS TotalPoints
+    FROM MX_POINTS_STANDINGS
+    GROUP BY RiderID
+),
+overall_year_brand AS (
     SELECT
         o.RiderID,
         r.[Year],
@@ -2044,9 +2059,13 @@ WITH overall_year_brand AS (
               + SUM(CASE WHEN o.M2_Start IS NOT NULL THEN 1 ELSE 0 END),
               0
             ), 2) AS DECIMAL(10,2)) AS AvgStart,
-        SUM(COALESCE(o.Points,0)) AS TotalPoints
+        COALESCE(MAX(yp.TotalPoints), 0) AS TotalPoints
     FROM MX_OVERALLS o
     JOIN Race_Table r ON r.RaceID = o.RaceID
+    LEFT JOIN mx_year_points yp
+      ON yp.RiderID = o.RiderID
+     AND yp.[Year] = r.[Year]
+     AND yp.ClassID = o.ClassID
     WHERE o.Sport_ID = 2
     GROUP BY
         o.RiderID,
@@ -2090,8 +2109,11 @@ overall_career_class AS (
               + SUM(CASE WHEN o.M2_Start IS NOT NULL THEN 1 ELSE 0 END),
               0
             ), 2) AS DECIMAL(10,2)) AS AvgStart,
-        SUM(COALESCE(o.Points,0)) AS TotalPoints
+        COALESCE(MAX(cp.TotalPoints), 0) AS TotalPoints
     FROM MX_OVERALLS o
+    LEFT JOIN mx_career_class_points cp
+      ON cp.RiderID = o.RiderID
+     AND cp.ClassID = o.ClassID
     WHERE o.Sport_ID = 2
     GROUP BY o.RiderID, o.ClassID
 ),
@@ -2129,8 +2151,10 @@ overall_career_combined AS (
               + SUM(CASE WHEN o.M2_Start IS NOT NULL THEN 1 ELSE 0 END),
               0
             ), 2) AS DECIMAL(10,2)) AS AvgStart,
-        SUM(COALESCE(o.Points,0)) AS TotalPoints
+        COALESCE(MAX(op.TotalPoints), 0) AS TotalPoints
     FROM MX_OVERALLS o
+    LEFT JOIN mx_career_overall_points op
+      ON op.RiderID = o.RiderID
     WHERE o.Sport_ID = 2
     GROUP BY o.RiderID
 )

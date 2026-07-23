@@ -1525,8 +1525,7 @@ def get_wmx_season_overall(year: int):
             wo.riderid AS RiderID,
             wo.FullName,
             wo.Brand,
-            wo.Result,
-            wo.Points
+            wo.Result
         FROM WMX_OVERALLS wo
         JOIN Race_Table rt ON rt.RaceID = wo.raceid
         WHERE rt.[Year] = :year
@@ -1568,8 +1567,7 @@ def get_wmx_season_overall(year: int):
                SUM(CASE WHEN Result <= 5 THEN 1 ELSE 0 END) AS Top5,
                SUM(CASE WHEN Result <= 10 THEN 1 ELSE 0 END) AS Top10,
                MIN(Result) AS BestOverall,
-               CAST(AVG(CAST(Result AS FLOAT)) AS DECIMAL(10,2)) AS AvgOverall,
-               SUM(COALESCE(Points, 0)) AS Points
+               CAST(AVG(CAST(Result AS FLOAT)) AS DECIMAL(10,2)) AS AvgOverall
         FROM Base
         GROUP BY RiderID
     )
@@ -1579,10 +1577,14 @@ def get_wmx_season_overall(year: int):
         overall.BestOverall, overall.AvgOverall,
         COALESCE(session_stats.Holeshots, 0) AS Holeshots,
         session_stats.AvgStart,
-        overall.Points
+        COALESCE(standings.Points, 0) AS Points
     FROM OverallStats overall
     LEFT JOIN StartHoleshotStats session_stats ON session_stats.RiderID = overall.RiderID
-    ORDER BY overall.Points DESC, overall.Wins DESC, overall.AvgOverall ASC
+    LEFT JOIN WMX_POINTS_STANDINGS standings
+      ON standings.RiderID = overall.RiderID
+     AND standings.[Year] = :year
+     AND standings.SportID = 4
+    ORDER BY Points DESC, overall.Wins DESC, overall.AvgOverall ASC
     """
     return fetch_all(query, {"year": year})
 
