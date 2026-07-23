@@ -221,6 +221,32 @@ def _get_mx_season_moto_qual_from_summary(year: int, classid: int):
     return fetch_all(query, locals())
 
 
+def _get_wmx_season_overall_from_summary(year: int):
+    return fetch_all(
+        """
+        SELECT RiderID, FullName, Brand, Starts, Wins, Podiums, Top5, Top10,
+               BestOverall, AvgOverall, Holeshots, AvgStart, Points
+        FROM dbo.SeasonWMXOverallSummary
+        WHERE [Year] = :year AND SportID = 4
+        ORDER BY Points DESC, Wins DESC, AvgOverall
+        """,
+        {"year": year},
+    )
+
+
+def _get_wmx_season_moto_qual_from_summary(year: int):
+    return fetch_all(
+        """
+        SELECT RiderID, FullName, MotoWins, MotoPodiums, BestMoto, AvgMoto,
+               Poles, QualStarts, AvgQual, ConsiWins
+        FROM dbo.SeasonWMXMotoQualSummary
+        WHERE [Year] = :year AND SportID = 4
+        ORDER BY CASE WHEN AvgMoto IS NULL THEN 1 ELSE 0 END, AvgMoto, AvgQual
+        """,
+        {"year": year},
+    )
+
+
 def _add_legacy_mx_qual_starts(results, year: int, classid: int):
     """Add unique 2004-2008 qualifying race appearances to season rows."""
     if not 2004 <= year <= 2008:
@@ -1484,6 +1510,219 @@ def get_smx_season_laps_led(year: int, classid: int):
     """
 
     return fetch_all(query, locals())
+
+
+@router.get("/api/wmx/season/overall")
+def get_wmx_season_overall(year: int):
+    summary_results = _get_wmx_season_overall_from_summary(year)
+    if summary_results:
+        return summary_results
+
+    query = """
+    WITH Base AS (
+        SELECT
+            wo.raceid AS RaceID,
+            wo.riderid AS RiderID,
+            wo.FullName,
+            wo.Brand,
+            wo.Result,
+            wo.Points
+        FROM WMX_OVERALLS wo
+        JOIN Race_Table rt ON rt.RaceID = wo.raceid
+        WHERE rt.[Year] = :year
+          AND rt.SportID = 4
+    ),
+    StartHoleshotRows AS (
+        SELECT wm.riderid AS RiderID, wm.[Start], wm.Holeshot
+        FROM WMX_MOTOS wm
+        JOIN Race_Table rt ON rt.RaceID = wm.raceid
+        WHERE rt.[Year] = :year AND rt.SportID = 4
+
+        UNION ALL
+
+        SELECT wo.riderid, fallback.[Start], fallback.Holeshot
+        FROM WMX_OVERALLS wo
+        JOIN Race_Table rt ON rt.RaceID = wo.raceid
+        CROSS APPLY (VALUES
+            (wo.M1_Start, COALESCE(wo.M1_Holeshot, wo.Holeshot)),
+            (wo.M2_Start, wo.M2_Holeshot)
+        ) fallback([Start], Holeshot)
+        WHERE rt.[Year] = :year AND rt.SportID = 4
+          AND NOT EXISTS (
+              SELECT 1 FROM WMX_MOTOS wm
+              WHERE wm.raceid = wo.raceid AND wm.riderid = wo.riderid
+          )
+          AND (fallback.[Start] IS NOT NULL OR fallback.Holeshot IS NOT NULL)
+    ),
+    StartHoleshotStats AS (
+        SELECT RiderID,
+               SUM(COALESCE(CAST(Holeshot AS INT), 0)) AS Holeshots,
+               CAST(AVG(CAST([Start] AS DECIMAL(10,2))) AS DECIMAL(10,2)) AS AvgStart
+        FROM StartHoleshotRows
+        GROUP BY RiderID
+    ),
+    OverallStats AS (
+        SELECT RiderID, MAX(FullName) AS FullName, MAX(Brand) AS Brand, COUNT(*) AS Starts,
+               SUM(CASE WHEN Result = 1 THEN 1 ELSE 0 END) AS Wins,
+               SUM(CASE WHEN Result <= 3 THEN 1 ELSE 0 END) AS Podiums,
+               SUM(CASE WHEN Result <= 5 THEN 1 ELSE 0 END) AS Top5,
+               SUM(CASE WHEN Result <= 10 THEN 1 ELSE 0 END) AS Top10,
+               MIN(Result) AS BestOverall,
+               CAST(AVG(CAST(Result AS FLOAT)) AS DECIMAL(10,2)) AS AvgOverall,
+               SUM(COALESCE(Points, 0)) AS Points
+        FROM Base
+        GROUP BY RiderID
+    )
+    SELECT
+        overall.RiderID, overall.FullName, overall.Brand, overall.Starts,
+        overall.Wins, overall.Podiums, overall.Top5, overall.Top10,
+        overall.BestOverall, overall.AvgOverall,
+        COALESCE(session_stats.Holeshots, 0) AS Holeshots,
+        session_stats.AvgStart,
+        overall.Points
+    FROM OverallStats overall
+    LEFT JOIN StartHoleshotStats session_stats ON session_stats.RiderID = overall.RiderID
+    ORDER BY overall.Points DESC, overall.Wins DESC, overall.AvgOverall ASC
+    """
+    return fetch_all(query, {"year": year})
+
+
+@router.get("/api/wmx/season/moto-qual")
+def get_wmx_season_moto_qual(year: int):
+    summary_results = _get_wmx_season_moto_qual_from_summary(year)
+    if summary_results:
+        return summary_results
+
+    query = """
+    WITH RiderBase AS (
+        SELECT DISTINCT wo.riderid AS RiderID, wo.FullName
+        FROM WMX_OVERALLS wo
+        JOIN Race_Table rt ON rt.RaceID = wo.raceid
+        WHERE rt.[Year] = :year AND rt.SportID = 4
+
+        UNION
+
+        SELECT DISTINCT wq.riderid AS RiderID, wq.FullName
+        FROM WMX_QUAL wq
+        JOIN Race_Table rt ON rt.RaceID = wq.raceid
+        WHERE rt.[Year] = :year AND rt.SportID = 4
+    ),
+    MotoStats AS (
+        SELECT
+            motos.RiderID,
+            SUM(CASE WHEN motos.Result = 1 THEN 1 ELSE 0 END) AS MotoWins,
+            SUM(CASE WHEN motos.Result <= 3 THEN 1 ELSE 0 END) AS MotoPodiums,
+            MIN(motos.Result) AS BestMoto,
+            CAST(AVG(CAST(motos.Result AS FLOAT)) AS DECIMAL(10,2)) AS AvgMoto
+        FROM (
+            SELECT wm.riderid AS RiderID, wm.Result
+            FROM WMX_MOTOS wm
+            JOIN Race_Table rt ON rt.RaceID = wm.raceid
+            WHERE rt.[Year] = :year AND rt.SportID = 4 AND wm.Result IS NOT NULL
+
+            UNION ALL
+
+            SELECT wo.riderid, valueset.Result
+            FROM WMX_OVERALLS wo
+            JOIN Race_Table rt ON rt.RaceID = wo.raceid
+            CROSS APPLY (VALUES (wo.Moto1), (wo.Moto2), (wo.Moto3)) valueset(Result)
+            WHERE rt.[Year] = :year AND rt.SportID = 4
+              AND valueset.Result IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM WMX_MOTOS wm
+                  WHERE wm.raceid = wo.raceid AND wm.riderid = wo.riderid
+              )
+        ) motos
+        GROUP BY motos.RiderID
+    ),
+    QualStats AS (
+        SELECT
+            wq.riderid AS RiderID,
+            COUNT(*) AS QualStarts,
+            SUM(CASE WHEN wq.Result = 1 THEN 1 ELSE 0 END) AS Poles,
+            CAST(AVG(CAST(wq.Result AS FLOAT)) AS DECIMAL(10,2)) AS AvgQual
+        FROM WMX_QUAL wq
+        JOIN Race_Table rt ON rt.RaceID = wq.raceid
+        WHERE rt.[Year] = :year AND rt.SportID = 4
+        GROUP BY wq.riderid
+    )
+    SELECT
+        rb.RiderID,
+        MAX(rb.FullName) AS FullName,
+        COALESCE(m.MotoWins, 0) AS MotoWins,
+        COALESCE(m.MotoPodiums, 0) AS MotoPodiums,
+        m.BestMoto,
+        m.AvgMoto,
+        COALESCE(q.Poles, 0) AS Poles,
+        COALESCE(q.QualStarts, 0) AS QualStarts,
+        q.AvgQual,
+        0 AS ConsiWins
+    FROM RiderBase rb
+    LEFT JOIN MotoStats m ON m.RiderID = rb.RiderID
+    LEFT JOIN QualStats q ON q.RiderID = rb.RiderID
+    GROUP BY rb.RiderID, m.MotoWins, m.MotoPodiums, m.BestMoto, m.AvgMoto,
+             q.Poles, q.QualStarts, q.AvgQual
+    ORDER BY CASE WHEN m.AvgMoto IS NULL THEN 1 ELSE 0 END, m.AvgMoto, q.AvgQual
+    """
+    return fetch_all(query, {"year": year})
+
+
+@router.get("/api/wmx/season/laps-led")
+def get_wmx_season_laps_led(year: int):
+    query = """
+    WITH RiderLaps AS (
+        SELECT
+            rt.[Year],
+            wo.riderid AS RiderID,
+            MAX(wo.FullName) AS FullName,
+            MAX(wo.Brand) AS Brand,
+            SUM(CASE
+                WHEN wo.LapsLed IS NOT NULL THEN CAST(wo.LapsLed AS INT)
+                ELSE COALESCE(CAST(wo.M1_Laps_Led AS INT), 0)
+                   + COALESCE(CAST(wo.M2_Laps_Led AS INT), 0)
+            END) AS LapsLed
+        FROM WMX_OVERALLS wo
+        JOIN Race_Table rt ON rt.RaceID = wo.raceid
+        WHERE rt.[Year] = :year AND rt.SportID = 4
+        GROUP BY rt.[Year], wo.riderid
+    ),
+    TotalLaps AS (
+        SELECT SUM(LapsLed) AS Total FROM RiderLaps
+    )
+    SELECT
+        r.[Year],
+        4 AS SportID,
+        4 AS ClassID,
+        r.RiderID,
+        r.FullName,
+        r.Brand,
+        r.LapsLed,
+        CASE WHEN t.Total = 0 THEN 0 ELSE r.LapsLed * 1.0 / t.Total END AS PctLapsLed
+    FROM RiderLaps r
+    CROSS JOIN TotalLaps t
+    ORDER BY r.LapsLed DESC
+    """
+    return fetch_all(query, {"year": year})
+
+
+@router.get("/api/wmx/season/points-progression")
+def get_wmx_season_points_progression(year: int):
+    query = """
+    SELECT
+        [Year],
+        SportID,
+        CAST(0 AS INT) AS ClassID,
+        OverallRound AS Round,
+        RiderID,
+        FullName,
+        CAST(NULL AS INT) AS RiderCoastID,
+        TotalPoints AS CumulativePoints
+    FROM dbo.vw_WMX_RunningStandings
+    WHERE [Year] = :year
+    ORDER BY RaceDate, RaceID, TotalPoints DESC, RiderID
+    """
+
+    return fetch_all(query, {"year": year})
 
 
 @router.get("/api/mx/season/points-progression")

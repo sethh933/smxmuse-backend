@@ -14,8 +14,8 @@ from db import engine
 router = APIRouter()
 
 SITE_URL = "https://smxmuse.com"
-SPORT_CODES = {1: "sx", 2: "mx", 3: "smx"}
-TRACK_SPORT_CODES = {1: "SX", 2: "MX", 3: "SMX"}
+SPORT_CODES = {1: "sx", 2: "mx", 3: "smx", 4: "wmx"}
+TRACK_SPORT_CODES = {1: "SX", 2: "MX", 3: "SMX", 4: "WMX"}
 STATIC_PATHS = (
     "/",
     "/about",
@@ -26,7 +26,7 @@ STATIC_PATHS = (
     "/compare",
 )
 
-SPORT_LABELS = {1: "Supercross", 2: "Motocross", 3: "SMX"}
+SPORT_LABELS = {1: "Supercross", 2: "Motocross", 3: "SMX", 4: "WMX"}
 
 
 def _slugify(value):
@@ -79,6 +79,7 @@ def build_prerender_manifest():
                 SELECT RiderID, RaceID FROM dbo.SX_MAINS
                 UNION ALL SELECT RiderID, RaceID FROM dbo.MX_OVERALLS
                 UNION ALL SELECT RiderID, RaceID FROM dbo.SMX_OVERALLS
+                UNION ALL SELECT RiderID, RaceID FROM dbo.WMX_OVERALLS
             ),
             RiderActivity AS (
                 SELECT RiderID, COUNT(*) AS AppearanceCount, MAX(RaceID) AS LatestRaceID
@@ -97,11 +98,14 @@ def build_prerender_manifest():
             INNER JOIN RankedRiders ranked ON ranked.RiderID = rl.RiderID
             WHERE rl.FullName IS NOT NULL
               AND LTRIM(RTRIM(rl.FullName)) <> ''
-              AND EXISTS (
-                  SELECT 1
-                  FROM dbo.RiderProfileAvailabilitySummary availability
-                  WHERE availability.RiderID = rl.RiderID
-                    AND (availability.HasSX = 1 OR availability.HasMX = 1 OR availability.HasSMX = 1)
+              AND (
+                  EXISTS (
+                      SELECT 1
+                      FROM dbo.RiderProfileAvailabilitySummary availability
+                      WHERE availability.RiderID = rl.RiderID
+                        AND (availability.HasSX = 1 OR availability.HasMX = 1 OR availability.HasSMX = 1)
+                  )
+                  OR COALESCE(rl.WMX, 0) = 1
               )
         """)).mappings().all()
 
@@ -111,14 +115,14 @@ def build_prerender_manifest():
                    ROW_NUMBER() OVER (ORDER BY rt.RaceDate DESC, rt.RaceID DESC) AS PrerenderRank
             FROM dbo.Race_Table rt
             LEFT JOIN dbo.TrackTable tt ON tt.TrackID = rt.TrackID
-            WHERE rt.SportID IN (1, 2, 3)
+            WHERE rt.SportID IN (1, 2, 3, 4)
         """)).mappings().all()
 
         tracks = conn.execute(text("""
             SELECT DISTINCT rt.TrackID, rt.TrackName, rt.SportID, tt.City, tt.State
             FROM dbo.Race_Table rt
             LEFT JOIN dbo.TrackTable tt ON tt.TrackID = rt.TrackID
-            WHERE rt.SportID IN (1, 2, 3)
+            WHERE rt.SportID IN (1, 2, 3, 4)
               AND rt.TrackID IS NOT NULL
               AND rt.TrackName IS NOT NULL
               AND LTRIM(RTRIM(rt.TrackName)) <> ''
@@ -134,7 +138,7 @@ def build_prerender_manifest():
         result_years = conn.execute(text("""
             SELECT SportID, [Year]
             FROM dbo.Race_Table
-            WHERE SportID IN (1, 2, 3)
+            WHERE SportID IN (1, 2, 3, 4)
             GROUP BY SportID, [Year]
         """)).mappings().all()
 
@@ -145,8 +149,9 @@ def build_prerender_manifest():
                 SELECT RaceID, ClassID FROM dbo.SX_MAINS
                 UNION SELECT RaceID, ClassID FROM dbo.MX_OVERALLS
                 UNION SELECT RaceID, ClassID FROM dbo.SMX_OVERALLS
+                UNION SELECT RaceID, 0 AS ClassID FROM dbo.WMX_OVERALLS
             ) results ON results.RaceID = rt.RaceID
-            WHERE rt.SportID IN (1, 2, 3)
+            WHERE rt.SportID IN (1, 2, 3, 4)
         """)).mappings().all()
 
         notes = conn.execute(text("""
@@ -157,21 +162,21 @@ def build_prerender_manifest():
         """)).mappings().all()
 
     pages = [
-        _page("/", "Supercross and Motocross Stats, Results, and Rider Profiles",
-              "Smxmuse is a Supercross and Motocross stats archive with rider profiles, race results, season dashboards, comparisons, and all-time leaderboards.",
+        _page("/", "Supercross, Motocross, SMX, and WMX Stats and Results",
+              "Smxmuse is a Supercross, Motocross, SMX, and WMX stats archive with rider profiles, race results, season dashboards, comparisons, and all-time leaderboards.",
               "Everything in one place, from the latest gate drop to all-time history."),
         _page("/about", "About smxmuse",
-              "Learn what smxmuse covers, how the Supercross and Motocross stats archive was built, and where to send feedback or business inquiries."),
+              "Learn what smxmuse covers, how the Supercross, Motocross, SMX, and WMX stats archive was built, and where to send feedback or business inquiries."),
         _page("/riders", "Browse Riders",
               "Browse the full smxmuse rider archive by last name or country, including featured riders and country pages.", "Riders"),
-        _page("/results", "Race Results Archive - Supercross",
-              "Browse Supercross race results by decade and season, then jump into full round-by-round result pages.", "Race Results"),
+        _page("/results", "Supercross, Motocross, SMX, and WMX Race Results Archive",
+              "Browse Supercross, Motocross, SMX, and WMX race results by decade and season, then open full round-by-round result pages.", "Race Results"),
         _page("/news", "Supercross and Motocross News and Analysis",
               "Read smxmuse Supercross and Motocross race notes, previews, recaps, and data-driven analysis.", "Race Notes and Analysis"),
-        _page("/leaderboards", "All-Time Supercross, Motocross, and SMX Leaderboards",
-              "Browse all-time smxmuse leaderboards for wins, podiums, starts, and career milestones across Supercross, Motocross, and SMX.", "All Time Leaderboards"),
-        _page("/compare", "Compare Supercross and Motocross Riders",
-              "Compare Supercross, Motocross, and SMX riders head to head across career wins, podiums, starts, championships, and season statistics.", "Rider Comparison"),
+        _page("/leaderboards", "All-Time Supercross, Motocross, SMX, and WMX Leaderboards",
+              "Browse all-time smxmuse leaderboards for wins, podiums, starts, and career milestones across Supercross, Motocross, SMX, and WMX.", "All Time Leaderboards"),
+        _page("/compare", "Compare Supercross, Motocross, SMX, and WMX Riders",
+              "Compare Supercross, Motocross, SMX, and WMX riders head to head across career wins, podiums, starts, championships, and season statistics.", "Rider Comparison"),
     ]
 
     for rider in riders:
@@ -183,7 +188,7 @@ def build_prerender_manifest():
         name = rider["FullName"].strip()
         slug = _slugify(name)
         path = f"/rider/{slug}-{rider['RiderID']}" if slug else f"/rider/{rider['RiderID']}"
-        description = f"Explore {name}'s Supercross and Motocross career stats, results history, qualifying numbers, and points totals on smxmuse."
+        description = f"Explore {name}'s Supercross, Motocross, SMX, and WMX career stats, results history, qualifying numbers, and points totals on smxmuse."
         person = {"@context": "https://schema.org", "@type": "Person", "name": name, "url": _absolute_url(path)}
         if rider["Country"]:
             person["nationality"] = rider["Country"].strip()
@@ -239,9 +244,9 @@ def build_prerender_manifest():
 
     for path in sorted(_season_paths(season_classes)):
         _, _, sport_code, year, class_slug = path.split("/")
-        sport = SPORT_LABELS[{"sx": 1, "mx": 2, "smx": 3}[sport_code]]
-        class_label = {"250W": "250 West", "250E": "250 East"}.get(class_slug, class_slug)
-        label = f"{class_label} {sport}"
+        sport = SPORT_LABELS[{"sx": 1, "mx": 2, "smx": 3, "wmx": 4}[sport_code]]
+        class_label = {"250W": "250 West", "250E": "250 East", "wmx": ""}.get(class_slug, class_slug)
+        label = f"{class_label} {sport}".strip()
         pages.append(_page(path, f"{year} {label} Season Dashboard",
                            f"Explore {year} {label} standings, stats, laps led, and championship progression on smxmuse.",
                            f"{year} {label}"))
@@ -275,7 +280,9 @@ def _season_paths(rows):
         if not sport:
             continue
 
-        if class_id == 1:
+        if sport_id == 4:
+            class_slugs = ("wmx",)
+        elif class_id == 1:
             class_slugs = ("450",)
         elif class_id == 2 and sport_id == 1:
             class_slugs = ("250W", "250E")
@@ -299,15 +306,18 @@ def build_sitemap_xml():
             FROM dbo.Rider_List rl
             WHERE rl.FullName IS NOT NULL
               AND LTRIM(RTRIM(rl.FullName)) <> ''
-              AND EXISTS (
-                  SELECT 1
-                  FROM dbo.RiderProfileAvailabilitySummary availability
-                  WHERE availability.RiderID = rl.RiderID
-                    AND (
-                        availability.HasSX = 1
-                        OR availability.HasMX = 1
-                        OR availability.HasSMX = 1
-                    )
+              AND (
+                  EXISTS (
+                      SELECT 1
+                      FROM dbo.RiderProfileAvailabilitySummary availability
+                      WHERE availability.RiderID = rl.RiderID
+                        AND (
+                            availability.HasSX = 1
+                            OR availability.HasMX = 1
+                            OR availability.HasSMX = 1
+                        )
+                  )
+                  OR COALESCE(rl.WMX, 0) = 1
               )
         """)).mappings().all()
 
@@ -321,13 +331,13 @@ def build_sitemap_xml():
                 tt.City
             FROM dbo.Race_Table rt
             LEFT JOIN dbo.TrackTable tt ON tt.TrackID = rt.TrackID
-            WHERE rt.SportID IN (1, 2, 3)
+            WHERE rt.SportID IN (1, 2, 3, 4)
         """)).mappings().all()
 
         tracks = conn.execute(text("""
             SELECT DISTINCT TrackID, TrackName, SportID
             FROM dbo.Race_Table
-            WHERE SportID IN (1, 2, 3)
+            WHERE SportID IN (1, 2, 3, 4)
               AND TrackID IS NOT NULL
               AND TrackName IS NOT NULL
               AND LTRIM(RTRIM(TrackName)) <> ''
@@ -343,7 +353,7 @@ def build_sitemap_xml():
         result_years = conn.execute(text("""
             SELECT SportID, [Year], MAX(RaceDate) AS LastRaceDate
             FROM dbo.Race_Table
-            WHERE SportID IN (1, 2, 3)
+            WHERE SportID IN (1, 2, 3, 4)
             GROUP BY SportID, [Year]
         """)).mappings().all()
 
@@ -356,8 +366,10 @@ def build_sitemap_xml():
                 SELECT RaceID, ClassID FROM dbo.MX_OVERALLS
                 UNION
                 SELECT RaceID, ClassID FROM dbo.SMX_OVERALLS
+                UNION
+                SELECT RaceID, 0 AS ClassID FROM dbo.WMX_OVERALLS
             ) results ON results.RaceID = rt.RaceID
-            WHERE rt.SportID IN (1, 2, 3)
+            WHERE rt.SportID IN (1, 2, 3, 4)
         """)).mappings().all()
 
         notes = conn.execute(text("""

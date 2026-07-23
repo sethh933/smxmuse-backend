@@ -69,6 +69,34 @@ def compare_riders(
 """)
 
             sport_id = 1
+        elif sport == "wmx":
+            main_query = text("""
+                SELECT
+                    riderid AS RiderID,
+                    COUNT(*) AS Starts,
+                    ROUND(AVG(CAST(Result AS FLOAT)), 2) AS AvgFinish,
+                    SUM(CASE WHEN Result = 1 THEN 1 ELSE 0 END) AS Wins,
+                    ROUND(100.0 * SUM(CASE WHEN Result = 1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 1) AS WinPct,
+                    SUM(CASE WHEN Moto1 = 1 THEN 1 ELSE 0 END)
+                      + SUM(CASE WHEN Moto2 = 1 THEN 1 ELSE 0 END)
+                      + SUM(CASE WHEN Moto3 = 1 THEN 1 ELSE 0 END) AS MotoWins,
+                    SUM(CASE WHEN Result <= 3 THEN 1 ELSE 0 END) AS Podiums,
+                    ROUND(100.0 * SUM(CASE WHEN Result <= 3 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 1) AS PodiumPct,
+                    ROUND(100.0 * SUM(CASE WHEN Result <= 5 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 1) AS Top5Pct,
+                    ROUND(100.0 * SUM(CASE WHEN Result <= 10 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 1) AS Top10Pct,
+                    SUM(CASE
+                        WHEN LapsLed IS NOT NULL THEN CAST(LapsLed AS INT)
+                        ELSE COALESCE(CAST(M1_Laps_Led AS INT), 0)
+                           + COALESCE(CAST(M2_Laps_Led AS INT), 0)
+                    END) AS LapsLed
+                FROM WMX_OVERALLS
+                WHERE riderid IN (:r1, :r2)
+                GROUP BY riderid
+            """)
+
+            heat_query = None
+            qual_query = None
+            sport_id = 4
         else:
             main_query = text("""
                 SELECT

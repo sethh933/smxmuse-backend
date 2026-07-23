@@ -453,6 +453,32 @@ def get_mx_overalls(raceid: int, classid: int, sport_id: int = 2):
     with pyodbc.connect(CONN_STR) as conn:
         cursor = conn.cursor()
 
+        if sport_id == 4:
+            cursor.execute("""
+                SELECT
+                    wo.Result,
+                    COALESCE(rl.FullName, wo.FullName) AS FullName,
+                    wo.riderid,
+                    wo.Brand,
+                    wo.Moto1,
+                    wo.Moto2,
+                    wo.LapsLed,
+                    wo.Holeshot,
+                    wo.M1_Start,
+                    wo.M2_Start,
+                    rl.ImageURL,
+                    rl.Country
+                FROM WMX_OVERALLS wo
+                LEFT JOIN Rider_List rl
+                    ON rl.RiderID = wo.riderid
+                WHERE wo.raceid = ?
+                  AND wo.sportid = 4
+                ORDER BY CASE WHEN wo.Result IS NULL THEN 1 ELSE 0 END, wo.Result
+            """, raceid)
+
+            columns = [column[0].lower() for column in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
         overall_table = "SMX_OVERALLS" if sport_id == 3 else "MX_OVERALLS"
         sport_column = "sport_id" if sport_id == 3 else "Sport_ID"
 
@@ -620,6 +646,90 @@ def get_mx_moto_rider_details(raceid: int, classid: int, moto: int, riderid: int
           AND mms.classid = :classid
           AND mms.Moto = :moto
           AND mms.sportid = 2
+    """, params)
+
+    return _build_lap_segment_detail(rows, rank_rows, riderid)
+
+
+@router.get("/api/race/wmx-motos")
+def get_wmx_motos(raceid: int, moto: int):
+    return fetch_all("""
+        SELECT
+            wm.Result AS result,
+            wm.riderid AS riderid,
+            COALESCE(rl.FullName, wm.FullName) AS fullname,
+            wm.Brand AS brand,
+            wm.Interval AS interval,
+            wm.BestLap AS bestlap,
+            wm.Start AS start,
+            wm.HoleshotPos AS holeshotline,
+            wm.Holeshot AS holeshot,
+            wm.RaceStatus AS racestatus,
+            rl.ImageURL AS imageurl,
+            rl.Country AS country
+        FROM dbo.WMX_MOTOS wm
+        LEFT JOIN dbo.Rider_List rl
+          ON rl.RiderID = wm.RiderID
+        WHERE wm.raceid = :raceid
+          AND wm.Moto = :moto
+          AND wm.sportid = 4
+        ORDER BY CASE WHEN wm.Result IS NULL THEN 1 ELSE 0 END, wm.Result
+    """, {"raceid": raceid, "moto": moto})
+
+
+@router.get("/api/race/wmx-moto-rider-details")
+def get_wmx_moto_rider_details(
+    raceid: int, moto: int, riderid: int, classid: int = 0
+):
+    params = {"raceid": raceid, "moto": moto, "riderid": riderid}
+    rows = fetch_all("""
+        SELECT
+            wms.Lap AS lap,
+            wms.riderid AS riderid,
+            wms.Laptime AS laptime,
+            wms.position AS position,
+            wms.SEG_1 AS seg_1,
+            wms.SEG_2 AS seg_2,
+            wms.SEG_3 AS seg_3,
+            wms.SEG_4 AS seg_4,
+            wms.SEG_5 AS seg_5,
+            wms.SEG_6 AS seg_6,
+            wms.SEG_7 AS seg_7,
+            wms.SEG_8 AS seg_8,
+            wms.SEG_9 AS seg_9,
+            wms.SEG_10 AS seg_10
+        FROM dbo.WMX_MOTO_SEGMENTS wms
+        WHERE wms.raceid = :raceid
+          AND wms.Moto = :moto
+          AND wms.riderid = :riderid
+          AND wms.sportid = 4
+        ORDER BY wms.Lap
+    """, params)
+    rank_rows = fetch_all("""
+        SELECT
+            wms.Lap AS lap,
+            wms.riderid AS riderid,
+            wms.Laptime AS laptime,
+            wm.RaceStatus AS race_status,
+            wms.SEG_1 AS seg_1,
+            wms.SEG_2 AS seg_2,
+            wms.SEG_3 AS seg_3,
+            wms.SEG_4 AS seg_4,
+            wms.SEG_5 AS seg_5,
+            wms.SEG_6 AS seg_6,
+            wms.SEG_7 AS seg_7,
+            wms.SEG_8 AS seg_8,
+            wms.SEG_9 AS seg_9,
+            wms.SEG_10 AS seg_10
+        FROM dbo.WMX_MOTO_SEGMENTS wms
+        LEFT JOIN dbo.WMX_MOTOS wm
+          ON wm.raceid = wms.raceid
+         AND wm.Moto = wms.Moto
+         AND wm.riderid = wms.riderid
+         AND wm.sportid = wms.sportid
+        WHERE wms.raceid = :raceid
+          AND wms.Moto = :moto
+          AND wms.sportid = 4
     """, params)
 
     return _build_lap_segment_detail(rows, rank_rows, riderid)
@@ -959,6 +1069,66 @@ def get_mx_qualifying_rider_details(raceid: int, classid: int, riderid: int):
     return _build_qualifying_session_detail(rows, rank_rows, riderid)
 
 
+@router.get("/api/race/wmx-qualifying")
+def get_wmx_qualifying(raceid: int):
+    return fetch_all("""
+        SELECT
+            wq.Result AS result,
+            wq.riderid AS riderid,
+            COALESCE(rl.FullName, wq.FullName) AS fullname,
+            wq.Brand AS brand,
+            wq.BestLap AS best_lap,
+            rl.ImageURL AS imageurl,
+            rl.Country AS country
+        FROM dbo.WMX_QUAL wq
+        LEFT JOIN dbo.Rider_List rl
+          ON rl.RiderID = wq.RiderID
+        WHERE wq.raceid = :raceid
+          AND wq.sportid = 4
+        ORDER BY CASE WHEN wq.Result IS NULL THEN 1 ELSE 0 END, wq.Result
+    """, {"raceid": raceid})
+
+
+@router.get("/api/race/wmx-qualifying-rider-details")
+def get_wmx_qualifying_rider_details(
+    raceid: int, riderid: int, classid: int = 0
+):
+    params = {"raceid": raceid, "riderid": riderid}
+    query_columns = """
+        CAST(NULL AS tinyint) AS [group],
+        wqs.[Session] AS session,
+        wqs.Lap AS lap,
+        wqs.riderid AS riderid,
+        wqs.Laptime AS laptime,
+        wqs.SEG_1 AS seg_1,
+        wqs.SEG_2 AS seg_2,
+        wqs.SEG_3 AS seg_3,
+        wqs.SEG_4 AS seg_4,
+        wqs.SEG_5 AS seg_5,
+        wqs.SEG_6 AS seg_6,
+        wqs.SEG_7 AS seg_7,
+        wqs.SEG_8 AS seg_8,
+        wqs.SEG_9 AS seg_9,
+        wqs.SEG_10 AS seg_10
+    """
+    rows = fetch_all(f"""
+        SELECT {query_columns}
+        FROM dbo.WMX_QUAL_SESSIONS wqs
+        WHERE wqs.raceid = :raceid
+          AND wqs.riderid = :riderid
+          AND wqs.sportid = 4
+        ORDER BY wqs.[Session], wqs.Lap
+    """, params)
+    rank_rows = fetch_all(f"""
+        SELECT {query_columns}
+        FROM dbo.WMX_QUAL_SESSIONS wqs
+        WHERE wqs.raceid = :raceid
+          AND wqs.sportid = 4
+    """, params)
+
+    return _build_qualifying_session_detail(rows, rank_rows, riderid)
+
+
 @router.get("/api/race/sx-qualifying-rider-details")
 def get_sx_qualifying_rider_details(raceid: int, classid: int, riderid: int):
     params = {
@@ -1203,6 +1373,18 @@ def get_supercross_heats(raceid: int, classid: int):
 
 @router.get("/api/race/mx-classes")
 def get_mx_classes(raceid: int, sport_id: int = 2):
+    if sport_id == 4:
+        query = """
+            SELECT 4 AS ClassID
+            WHERE EXISTS (
+                SELECT 1
+                FROM WMX_OVERALLS
+                WHERE RaceID = :raceid
+                  AND SportID = 4
+            )
+        """
+        return fetch_all(query, {"raceid": raceid})
+
     result_table = "SMX_OVERALLS" if sport_id == 3 else "MX_OVERALLS"
     query = f"""
         SELECT DISTINCT ClassID

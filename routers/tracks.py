@@ -216,6 +216,73 @@ def get_track_profile(track_id: int, sport_id: int, class_id: int):
         GROUP BY fm.RiderID, fm.FullName
         ORDER BY Starts DESC, fm.FullName ASC;
         """
+    elif sport_id == 4:
+        query = """
+        DECLARE @TrackID INT = ?;
+        DECLARE @ClassID INT = ?;
+
+        IF OBJECT_ID('tempdb..#FilteredMains') IS NOT NULL
+            DROP TABLE #FilteredMains;
+
+        SELECT
+            wo.RiderID,
+            wo.FullName,
+            wo.Result,
+            wo.RaceID,
+            wo.Brand
+        INTO #FilteredMains
+        FROM WMX_OVERALLS wo
+        JOIN Race_Table rt
+            ON rt.RaceID = wo.RaceID
+        WHERE rt.TrackID = @TrackID
+          AND rt.SportID = 4;
+
+        SELECT
+            rt.TrackName,
+            rt.RaceID,
+            rt.RaceDate,
+            tt.City,
+            tt.State,
+            fm.RiderID,
+            fm.FullName AS Winner,
+            fm.Brand
+        FROM #FilteredMains fm
+        JOIN Race_Table rt
+            ON rt.RaceID = fm.RaceID
+        LEFT JOIN TrackTable tt
+            ON tt.TrackID = rt.TrackID
+        WHERE fm.Result = 1
+        ORDER BY rt.RaceDate DESC, rt.RaceID DESC;
+
+        SELECT
+            ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC, fm.FullName ASC) AS Rank,
+            fm.RiderID,
+            fm.FullName,
+            COUNT(*) AS Wins
+        FROM #FilteredMains fm
+        WHERE fm.Result = 1
+        GROUP BY fm.RiderID, fm.FullName
+        ORDER BY Wins DESC, fm.FullName ASC;
+
+        SELECT
+            ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC, fm.FullName ASC) AS Rank,
+            fm.RiderID,
+            fm.FullName,
+            COUNT(*) AS Podiums
+        FROM #FilteredMains fm
+        WHERE fm.Result <= 3
+        GROUP BY fm.RiderID, fm.FullName
+        ORDER BY Podiums DESC, fm.FullName ASC;
+
+        SELECT
+            ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC, fm.FullName ASC) AS Rank,
+            fm.RiderID,
+            fm.FullName,
+            COUNT(*) AS Starts
+        FROM #FilteredMains fm
+        GROUP BY fm.RiderID, fm.FullName
+        ORDER BY Starts DESC, fm.FullName ASC;
+        """
     else:
         raise HTTPException(status_code=400, detail="Invalid sport_id")
 
@@ -258,17 +325,21 @@ def get_track_profile(track_id: int, sport_id: int, class_id: int):
 @router.get("/api/track-classes")
 def get_track_classes(track_id: int, sport_id: int):
     query = """
-    SELECT DISTINCT ClassID
+    SELECT DISTINCT x.SportID, x.ClassID
     FROM Race_Table rt
     JOIN (
-        SELECT RaceID, ClassID FROM SX_MAINS
+        SELECT RaceID, 1 AS SportID, ClassID FROM SX_MAINS
         UNION
-        SELECT RaceID, ClassID FROM MX_OVERALLS
+        SELECT RaceID, 2 AS SportID, ClassID FROM MX_OVERALLS
         UNION
-        SELECT RaceID, ClassID FROM SMX_OVERALLS
+        SELECT RaceID, 3 AS SportID, ClassID FROM SMX_OVERALLS
+        UNION
+        SELECT RaceID, 4 AS SportID, 0 AS ClassID FROM WMX_OVERALLS
     ) x ON x.RaceID = rt.RaceID
     WHERE rt.TrackID = :track_id
-      AND rt.SportID = :sport_id
+      AND x.SportID = rt.SportID
+      AND x.SportID = :sport_id
+    ORDER BY x.SportID, x.ClassID
     """
 
     return fetch_all(query, locals())

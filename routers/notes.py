@@ -1,6 +1,11 @@
 from datetime import date
+import json
+import logging
+import os
 import re
 from typing import List, Literal, Optional
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
@@ -11,9 +16,50 @@ from routers.admin import _require_admin_token
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 NOTES_TABLES_READY = False
 VALID_CATEGORIES = {"preRace", "raceRecap"}
+
+GITHUB_DEPLOY_OWNER = os.getenv("GITHUB_DEPLOY_OWNER", "sethh933")
+GITHUB_DEPLOY_REPO = os.getenv("GITHUB_DEPLOY_REPO", "smxmuse-frontend")
+GITHUB_DEPLOY_WORKFLOW = os.getenv(
+    "GITHUB_DEPLOY_WORKFLOW",
+    "azure-static-web-apps-polite-cliff-09580f00f.yml",
+)
+GITHUB_DEPLOY_REF = os.getenv("GITHUB_DEPLOY_REF", "main")
+
+
+def _trigger_frontend_deploy() -> bool:
+    token = os.getenv("GITHUB_DEPLOY_TOKEN")
+    if not token:
+        logger.warning("GITHUB_DEPLOY_TOKEN is not configured; skipping frontend deployment.")
+        return False
+
+    url = (
+        f"https://api.github.com/repos/{GITHUB_DEPLOY_OWNER}/{GITHUB_DEPLOY_REPO}"
+        f"/actions/workflows/{GITHUB_DEPLOY_WORKFLOW}/dispatches"
+    )
+    payload = json.dumps({"ref": GITHUB_DEPLOY_REF}).encode("utf-8")
+    deploy_request = urllib_request.Request(
+        url,
+        data=payload,
+        method="POST",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "smxmuse-api",
+        },
+    )
+
+    try:
+        with urllib_request.urlopen(deploy_request, timeout=10) as response:
+            return response.status == 204
+    except (urllib_error.HTTPError, urllib_error.URLError, TimeoutError) as exc:
+        logger.exception("Unable to trigger the frontend deployment: %s", exc)
+        return False
 
 
 class NoteSlideInput(BaseModel):
@@ -840,11 +886,14 @@ def create_admin_note(note: NoteInput, x_admin_token: Optional[str] = Header(def
         _save_note_sections(conn, note_id, note.sections)
         _save_entity_links(conn, note_id, _resolve_entities(conn, _collect_note_input_text(note)))
 
+    deployment_triggered = note.status == "published" and _trigger_frontend_deploy()
+
     return {
         "id": note_id,
         "slug": slug,
         "path": f"/news/{slug}",
         "status": note.status,
+        "deployment_triggered": deployment_triggered,
     }
 
 
@@ -905,11 +954,14 @@ def update_admin_note(
         _save_note_sections(conn, note_id, note.sections)
         _save_entity_links(conn, note_id, _resolve_entities(conn, _collect_note_input_text(note)))
 
+    deployment_triggered = note.status == "published" and _trigger_frontend_deploy()
+
     return {
         "id": note_id,
         "slug": slug,
         "path": f"/news/{slug}",
         "status": note.status,
+        "deployment_triggered": deployment_triggered,
     }
 
 

@@ -1,4 +1,4 @@
-"""Refresh rider summary tables from raw SX/MX results data.
+"""Refresh rider summary tables from raw SX/MX/SMX/WMX results data.
 
 Run this after race imports, or on a scheduled cadence such as Saturday night:
     python scripts/refresh_rider_profile_summaries.py
@@ -11,7 +11,11 @@ from urllib.request import Request, urlopen
 import pyodbc
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-SQL_PATH = BASE_DIR / "sql" / "refresh_rider_profile_summaries.sql"
+SQL_PATHS = (
+    BASE_DIR / "sql" / "refresh_rider_profile_summaries.sql",
+    BASE_DIR / "sql" / "setup_wmx_points_standings.sql",
+    BASE_DIR / "sql" / "setup_wmx_summaries_and_indexes.sql",
+)
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
@@ -39,19 +43,19 @@ def _split_batches(sql_text: str):
 
 
 def refresh_rider_profile_summaries():
-    sql_text = SQL_PATH.read_text(encoding="utf-8")
-    batches = _split_batches(sql_text)
-
     with pyodbc.connect(CONN_STR) as conn:
         conn.autocommit = False
         cursor = conn.cursor()
 
-        for index, batch in enumerate(batches, start=1):
-            print(f"Running batch {index}/{len(batches)}...")
-            cursor.execute(batch)
+        for sql_path in SQL_PATHS:
+            batches = _split_batches(sql_path.read_text(encoding="utf-8"))
 
-            while cursor.nextset():
-                pass
+            for index, batch in enumerate(batches, start=1):
+                print(f"Running {sql_path.name} batch {index}/{len(batches)}...")
+                cursor.execute(batch)
+
+                while cursor.nextset():
+                    pass
 
         conn.commit()
 

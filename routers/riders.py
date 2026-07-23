@@ -22,7 +22,7 @@ router = APIRouter()
 def _get_rider_identity_and_availability(cursor, rider_id: int):
     cursor.execute(
         """
-        SELECT RiderID, FullName, Country, DOB, ImageURL
+        SELECT RiderID, FullName, Country, DOB, ImageURL, WMX
         FROM Rider_List
         WHERE RiderID = ?
         """,
@@ -39,6 +39,7 @@ def _get_rider_identity_and_availability(cursor, rider_id: int):
         "country": rider.Country,
         "dob": rider.DOB,
         "image_url": rider.ImageURL,
+        "wmx": rider.WMX == 1,
     }
 
     try:
@@ -72,6 +73,7 @@ def _get_rider_identity_and_availability(cursor, rider_id: int):
                 availability.HasSX == 1,
                 availability.HasMX == 1 or has_legacy_mx,
                 availability.HasSMX == 1,
+                rider.WMX == 1,
             )
     except pyodbc.Error:
         pass
@@ -126,7 +128,147 @@ def _get_rider_identity_and_availability(cursor, rider_id: int):
     )
 
     availability = cursor.fetchone()
-    return rider_data, availability.HasSX == 1, availability.HasMX == 1, availability.HasSMX == 1
+    return rider_data, availability.HasSX == 1, availability.HasMX == 1, availability.HasSMX == 1, rider.WMX == 1
+
+
+def _get_wmx_profile_payload(cursor, rider_id: int):
+    cursor.execute(
+        """
+        WITH Yearly AS (
+            SELECT
+                r.[Year],
+                4 AS ClassID,
+                'WMX' AS Class,
+                o.Brand,
+                COUNT(*) AS Starts,
+                MIN(o.Result) AS BestOverall,
+                MIN(m.BestMoto) AS BestMoto,
+                CAST(ROUND(AVG(CAST(o.Result AS DECIMAL(10,2))), 2) AS DECIMAL(10,2)) AS AvgOverallFinish,
+                CAST(ROUND(
+                    SUM(COALESCE(CAST(o.Moto1 AS DECIMAL(10,2)), 0))
+                    + SUM(COALESCE(CAST(o.Moto2 AS DECIMAL(10,2)), 0))
+                    + SUM(COALESCE(CAST(o.Moto3 AS DECIMAL(10,2)), 0)), 2)
+                    / NULLIF(
+                        SUM(CASE WHEN o.Moto1 IS NOT NULL THEN 1 ELSE 0 END)
+                        + SUM(CASE WHEN o.Moto2 IS NOT NULL THEN 1 ELSE 0 END)
+                        + SUM(CASE WHEN o.Moto3 IS NOT NULL THEN 1 ELSE 0 END), 0
+                    ) AS DECIMAL(10,2)) AS AvgMotoFinish,
+                CAST(ROUND(AVG(CAST(o.Moto1 AS DECIMAL(10,2))), 2) AS DECIMAL(10,2)) AS AvgMoto1Finish,
+                CAST(ROUND(AVG(CAST(o.Moto2 AS DECIMAL(10,2))), 2) AS DECIMAL(10,2)) AS AvgMoto2Finish,
+                SUM(CASE WHEN o.Result <= 10 THEN 1 ELSE 0 END) AS Top10s,
+                CAST(ROUND(100.0 * SUM(CASE WHEN o.Result <= 10 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS DECIMAL(10,2)) AS Top10Pct,
+                SUM(CASE WHEN o.Result <= 5 THEN 1 ELSE 0 END) AS Top5s,
+                CAST(ROUND(100.0 * SUM(CASE WHEN o.Result <= 5 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS DECIMAL(10,2)) AS Top5Pct,
+                SUM(CASE WHEN o.Result <= 3 THEN 1 ELSE 0 END) AS Podiums,
+                CAST(ROUND(100.0 * SUM(CASE WHEN o.Result <= 3 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS DECIMAL(10,2)) AS PodiumPct,
+                SUM(CASE WHEN o.Result = 1 THEN 1 ELSE 0 END) AS Wins,
+                CAST(ROUND(100.0 * SUM(CASE WHEN o.Result = 1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS DECIMAL(10,2)) AS WinPct,
+                SUM(COALESCE(CAST(o.LapsLed AS INT), COALESCE(CAST(o.M1_Laps_Led AS INT), 0) + COALESCE(CAST(o.M2_Laps_Led AS INT), 0))) AS LapsLed,
+                SUM(COALESCE(CAST(o.Holeshot AS INT), 0)) AS Holeshots,
+                SUM(COALESCE(CAST(o.Points AS INT), 0)) AS TotalPoints
+            FROM WMX_OVERALLS o
+            INNER JOIN Race_Table r ON r.RaceID = o.raceid
+            CROSS APPLY (
+                SELECT MIN(v.Result) AS BestMoto
+                FROM (VALUES (o.Moto1), (o.Moto2), (o.Moto3)) v(Result)
+            ) m
+            WHERE o.riderid = ?
+            GROUP BY r.[Year], o.Brand
+        ),
+        Career AS (
+            SELECT
+                NULL AS [Year],
+                0 AS ClassID,
+                'WMX' AS Class,
+                NULL AS Brand,
+                COUNT(*) AS Starts,
+                MIN(o.Result) AS BestOverall,
+                MIN(m.BestMoto) AS BestMoto,
+                CAST(ROUND(AVG(CAST(o.Result AS DECIMAL(10,2))), 2) AS DECIMAL(10,2)) AS AvgOverallFinish,
+                CAST(ROUND(
+                    SUM(COALESCE(CAST(o.Moto1 AS DECIMAL(10,2)), 0))
+                    + SUM(COALESCE(CAST(o.Moto2 AS DECIMAL(10,2)), 0))
+                    + SUM(COALESCE(CAST(o.Moto3 AS DECIMAL(10,2)), 0)), 2)
+                    / NULLIF(
+                        SUM(CASE WHEN o.Moto1 IS NOT NULL THEN 1 ELSE 0 END)
+                        + SUM(CASE WHEN o.Moto2 IS NOT NULL THEN 1 ELSE 0 END)
+                        + SUM(CASE WHEN o.Moto3 IS NOT NULL THEN 1 ELSE 0 END), 0
+                    ) AS DECIMAL(10,2)) AS AvgMotoFinish,
+                CAST(ROUND(AVG(CAST(o.Moto1 AS DECIMAL(10,2))), 2) AS DECIMAL(10,2)) AS AvgMoto1Finish,
+                CAST(ROUND(AVG(CAST(o.Moto2 AS DECIMAL(10,2))), 2) AS DECIMAL(10,2)) AS AvgMoto2Finish,
+                SUM(CASE WHEN o.Result <= 10 THEN 1 ELSE 0 END) AS Top10s,
+                CAST(ROUND(100.0 * SUM(CASE WHEN o.Result <= 10 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS DECIMAL(10,2)) AS Top10Pct,
+                SUM(CASE WHEN o.Result <= 5 THEN 1 ELSE 0 END) AS Top5s,
+                CAST(ROUND(100.0 * SUM(CASE WHEN o.Result <= 5 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS DECIMAL(10,2)) AS Top5Pct,
+                SUM(CASE WHEN o.Result <= 3 THEN 1 ELSE 0 END) AS Podiums,
+                CAST(ROUND(100.0 * SUM(CASE WHEN o.Result <= 3 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS DECIMAL(10,2)) AS PodiumPct,
+                SUM(CASE WHEN o.Result = 1 THEN 1 ELSE 0 END) AS Wins,
+                CAST(ROUND(100.0 * SUM(CASE WHEN o.Result = 1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS DECIMAL(10,2)) AS WinPct,
+                SUM(COALESCE(CAST(o.LapsLed AS INT), COALESCE(CAST(o.M1_Laps_Led AS INT), 0) + COALESCE(CAST(o.M2_Laps_Led AS INT), 0))) AS LapsLed,
+                SUM(COALESCE(CAST(o.Holeshot AS INT), 0)) AS Holeshots,
+                SUM(COALESCE(CAST(o.Points AS INT), 0)) AS TotalPoints
+            FROM WMX_OVERALLS o
+            CROSS APPLY (
+                SELECT MIN(v.Result) AS BestMoto
+                FROM (VALUES (o.Moto1), (o.Moto2), (o.Moto3)) v(Result)
+            ) m
+            WHERE o.riderid = ?
+        )
+        SELECT *
+        FROM (
+            SELECT * FROM Yearly
+            UNION ALL
+            SELECT * FROM Career
+        ) final_rows
+        ORDER BY CASE WHEN [Year] IS NULL THEN 1 ELSE 0 END, [Year], Brand
+        """,
+        rider_id,
+        rider_id,
+    )
+    columns = [col[0] for col in cursor.description]
+    return {"wmx_stats": [dict(zip(columns, row)) for row in cursor.fetchall()]}
+
+
+def _get_wmx_profile_payload_from_summary(cursor, rider_id: int):
+    try:
+        cursor.execute(
+            """
+            SELECT
+                [Year],
+                CASE WHEN [Year] IS NULL THEN 0 ELSE 4 END AS ClassID,
+                Class,
+                Brand,
+                Starts,
+                BestOverall,
+                BestMoto,
+                AvgOverallFinish,
+                AvgMotoFinish,
+                AvgMoto1Finish,
+                AvgMoto2Finish,
+                Top10s,
+                Top10Pct,
+                Top5s,
+                Top5Pct,
+                Podiums,
+                PodiumPct,
+                Wins,
+                WinPct,
+                LapsLed,
+                Holeshots,
+                AvgStart,
+                TotalPoints
+            FROM dbo.RiderProfileWMXStatsSummary
+            WHERE RiderID = ? AND SportID = 4
+            ORDER BY CASE WHEN [Year] IS NULL THEN 1 ELSE 0 END, [Year], Brand
+            """,
+            rider_id,
+        )
+    except pyodbc.Error:
+        return None
+
+    columns = [col[0] for col in cursor.description]
+    rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    return {"wmx_stats": rows} if rows else None
 
 
 def _format_year_ranges(years):
@@ -787,6 +929,56 @@ ORDER BY RaceDate DESC
     return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
 
+def _get_wmx_race_results(cursor, rider_id: int):
+    cursor.execute(
+        """
+        WITH WMXRiderRaces AS (
+            SELECT raceid FROM WMX_OVERALLS WHERE riderid = ?
+            UNION
+            SELECT raceid FROM WMX_QUAL WHERE riderid = ?
+        ),
+        WMXOverall AS (
+            SELECT raceid, MIN(Result) AS Result, MAX(Brand) AS Brand
+            FROM WMX_OVERALLS
+            WHERE riderid = ?
+            GROUP BY raceid
+        ),
+        WMXQual AS (
+            SELECT raceid, MIN(Result) AS QualResult, MAX(Brand) AS Brand
+            FROM WMX_QUAL
+            WHERE riderid = ?
+            GROUP BY raceid
+        )
+        SELECT
+            COALESCE(CAST(o.Result AS VARCHAR), '-') AS Result,
+            rt.RaceID,
+            rt.TrackID,
+            rt.TrackName,
+            rt.RaceDate,
+            tt.City,
+            'WMX' AS Class,
+            COALESCE(o.Brand, q.Brand, '-') AS Brand,
+            COALESCE(CAST(q.QualResult AS VARCHAR), '-') AS QualResult,
+            '-' AS HeatResult,
+            '-' AS LCQResult,
+            'WMX' AS Discipline
+        FROM WMXRiderRaces rr
+        INNER JOIN Race_Table rt ON rt.RaceID = rr.raceid
+        LEFT JOIN TrackTable tt ON tt.TrackID = rt.TrackID
+        LEFT JOIN WMXOverall o ON o.raceid = rr.raceid
+        LEFT JOIN WMXQual q ON q.raceid = rr.raceid
+        WHERE rt.SportID = 4
+        ORDER BY rt.RaceDate DESC, rt.RaceID DESC
+        """,
+        rider_id,
+        rider_id,
+        rider_id,
+        rider_id,
+    )
+    columns = [column[0] for column in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
 def _get_rider_points_from_summary(cursor, rider_id: int):
     try:
         cursor.execute(
@@ -807,7 +999,9 @@ def _get_rider_points_from_summary(cursor, rider_id: int):
         results = [dict(zip(columns, row)) for row in cursor.fetchall()]
         if not any("SMX" in (row.get("Class") or "") for row in results):
             results.extend(_get_smx_points_from_standings(cursor, rider_id))
-            results.sort(key=lambda row: (-row["Year"], row.get("SortOrder", 0), row["Class"]))
+        if not any("WMX" in (row.get("Class") or "") for row in results):
+            results.extend(_get_wmx_points_from_standings(cursor, rider_id))
+        results.sort(key=lambda row: (-row["Year"], row.get("SortOrder", 0), row["Class"]))
     except pyodbc.Error:
         return None
 
@@ -863,6 +1057,41 @@ SELECT
 FROM SMX_WithTies
 WHERE RiderID = @RiderID
 ORDER BY [Year] DESC, SortOrder, Class;
+        """,
+        rider_id,
+    )
+    columns = [column[0] for column in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
+def _get_wmx_points_from_standings(cursor, rider_id: int):
+    cursor.execute(
+        """
+DECLARE @RiderID INT = ?;
+
+WITH WMX_WithTies AS (
+    SELECT
+        [Year],
+        RiderID,
+        Points,
+        Brand,
+        CASE
+            WHEN COUNT(*) OVER (PARTITION BY [Year], Result) > 1
+                THEN 'T-' + CAST(Result AS VARCHAR)
+            ELSE CAST(Result AS VARCHAR)
+        END AS ResultDisplay
+    FROM WMX_POINTS_STANDINGS
+)
+SELECT
+    [Year],
+    ResultDisplay AS Result,
+    Points,
+    'WMX' AS Class,
+    Brand,
+    -2 AS SortOrder
+FROM WMX_WithTies
+WHERE RiderID = @RiderID
+ORDER BY [Year] DESC;
         """,
         rider_id,
     )
@@ -2067,11 +2296,17 @@ def get_rider_profile(rider_id: int, sport: str = "SX"):
     try:
         with pyodbc.connect(CONN_STR) as conn:
             cursor = conn.cursor()
-            rider_data, has_sx, has_mx, has_smx = _get_rider_identity_and_availability(cursor, rider_id)
+            rider_data, has_sx, has_mx, has_smx, has_wmx = _get_rider_identity_and_availability(cursor, rider_id)
             number_history = _get_rider_number_history(cursor, rider_id)
             accolades = _get_rider_accolades(cursor, rider_id)
 
-            if sport.upper() == "SMX":
+            if sport.upper() == "WMX":
+                payload = _get_wmx_profile_payload_from_summary(cursor, rider_id)
+                if payload is None and has_wmx:
+                    payload = _get_wmx_profile_payload(cursor, rider_id)
+                if payload is None:
+                    payload = {"wmx_stats": []}
+            elif sport.upper() == "SMX":
                 payload = _get_smx_profile_payload_from_summary(cursor, rider_id)
                 if payload is None and has_smx:
                     payload = _get_smx_profile_payload(cursor, rider_id)
@@ -2096,6 +2331,7 @@ def get_rider_profile(rider_id: int, sport: str = "SX"):
                 "hasSX": has_sx,
                 "hasMX": has_mx,
                 "hasSMX": has_smx,
+                "hasWMX": has_wmx,
                 "number_history": number_history,
                 "accolades": accolades,
                 **payload,
@@ -2111,7 +2347,8 @@ def search_riders(q: str = Query(..., min_length=2)):
             RiderID,
             FullName,
             country AS Country,
-            ImageURL
+            ImageURL,
+            WMX
         FROM Rider_List
         WHERE 
             LOWER(FullName) LIKE LOWER(:search)
@@ -2137,6 +2374,7 @@ def search_riders(q: str = Query(..., min_length=2)):
             "FullName": row["FullName"],
             "Country": row["Country"],
             "ImageURL": row["ImageURL"],
+            "WMX": row["WMX"],
         }
         for row in rows
     ]
@@ -2490,7 +2728,7 @@ def get_rider_race_results(rider_id: int):
 
             cursor.execute(
                 """
-                SELECT FullName, Country, ImageURL
+                SELECT FullName, Country, ImageURL, WMX
                 FROM Rider_List
                 WHERE RiderID = ?
                 """,
@@ -2503,15 +2741,22 @@ def get_rider_race_results(rider_id: int):
                 "full_name": rider.FullName,
                 "country": rider.Country,
                 "image_url": rider.ImageURL,
+                "wmx": rider.WMX == 1,
             }
 
             summary_results = _get_rider_race_results_from_summary(cursor, rider_id)
             if summary_results is not None:
                 if not any(row.get("Discipline") == "SMX" for row in summary_results):
                     summary_results.extend(_get_smx_race_results(cursor, rider_id))
+                if rider.WMX == 1 and not any(row.get("Discipline") == "WMX" for row in summary_results):
+                    summary_results.extend(_get_wmx_race_results(cursor, rider_id))
                 summary_results = _merge_legacy_mx_race_results(
                     summary_results,
                     _get_legacy_mx_race_result_rows(cursor, rider_id),
+                )
+                summary_results.sort(
+                    key=lambda row: (row["RaceDate"], row["RaceID"]),
+                    reverse=True,
                 )
                 return {"rider": rider_data, "results": summary_results}
 
@@ -2694,6 +2939,12 @@ ORDER BY RaceDate DESC
                 results,
                 _get_legacy_mx_race_result_rows(cursor, rider_id),
             )
+            if rider.WMX == 1:
+                results.extend(_get_wmx_race_results(cursor, rider_id))
+                results.sort(
+                    key=lambda row: (row["RaceDate"], row["RaceID"]),
+                    reverse=True,
+                )
 
             return {"rider": rider_data, "results": results}
 

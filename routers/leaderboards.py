@@ -62,6 +62,18 @@ GROUP BY
 ORDER BY wins DESC;
     """
 
+    wmx_query = """
+        SELECT
+            w.riderid AS riderid,
+            rl.FullName AS fullname,
+            COUNT(*) AS wins
+        FROM WMX_OVERALLS w
+        JOIN Rider_List rl ON rl.RiderID = w.riderid
+        WHERE w.Result = 1
+        GROUP BY w.riderid, rl.FullName
+        ORDER BY wins DESC, rl.FullName;
+    """
+
     try:
         with pyodbc.connect(CONN_STR) as conn:
             cursor = conn.cursor()
@@ -84,7 +96,13 @@ ORDER BY wins DESC;
                 for row in cursor.fetchall()
             ]
 
-        return {"supercross": supercross, "motocross": motocross, "smx": smx}
+            cursor.execute(wmx_query)
+            wmx = [
+                {"riderid": row.riderid, "fullname": row.fullname, "wins": row.wins}
+                for row in cursor.fetchall()
+            ]
+
+        return {"supercross": supercross, "motocross": motocross, "smx": smx, "wmx": wmx}
 
     except Exception as e:
         raise_http_error("Failed to load wins leaderboard.", e)
@@ -142,6 +160,18 @@ GROUP BY
 ORDER BY podiums DESC;
     """
 
+    wmx_query = """
+        SELECT
+            w.riderid AS riderid,
+            rl.FullName AS fullname,
+            COUNT(*) AS podiums
+        FROM WMX_OVERALLS w
+        JOIN Rider_List rl ON rl.RiderID = w.riderid
+        WHERE w.Result <= 3
+        GROUP BY w.riderid, rl.FullName
+        ORDER BY podiums DESC, rl.FullName;
+    """
+
     try:
         with pyodbc.connect(CONN_STR) as conn:
             cursor = conn.cursor()
@@ -164,7 +194,13 @@ ORDER BY podiums DESC;
                 for row in cursor.fetchall()
             ]
 
-        return {"supercross": supercross, "motocross": motocross, "smx": smx}
+            cursor.execute(wmx_query)
+            wmx = [
+                {"riderid": row.riderid, "fullname": row.fullname, "podiums": row.podiums}
+                for row in cursor.fetchall()
+            ]
+
+        return {"supercross": supercross, "motocross": motocross, "smx": smx, "wmx": wmx}
 
     except Exception as e:
         raise_http_error("Failed to load podiums leaderboard.", e)
@@ -219,6 +255,17 @@ GROUP BY
 ORDER BY starts DESC;
     """
 
+    wmx_query = """
+        SELECT
+            w.riderid AS riderid,
+            rl.FullName AS fullname,
+            COUNT(*) AS starts
+        FROM WMX_OVERALLS w
+        JOIN Rider_List rl ON rl.RiderID = w.riderid
+        GROUP BY w.riderid, rl.FullName
+        ORDER BY starts DESC, rl.FullName;
+    """
+
     try:
         with pyodbc.connect(CONN_STR) as conn:
             cursor = conn.cursor()
@@ -241,7 +288,13 @@ ORDER BY starts DESC;
                 for row in cursor.fetchall()
             ]
 
-        return {"supercross": supercross, "motocross": motocross, "smx": smx}
+            cursor.execute(wmx_query)
+            wmx = [
+                {"riderid": row.riderid, "fullname": row.fullname, "starts": row.starts}
+                for row in cursor.fetchall()
+            ]
+
+        return {"supercross": supercross, "motocross": motocross, "smx": smx, "wmx": wmx}
 
     except Exception as e:
         raise_http_error("Failed to load starts leaderboard.", e)
@@ -305,6 +358,26 @@ GROUP BY
 ORDER BY moto_wins DESC;
     """
 
+    wmx_query = """
+        SELECT
+            w.riderid AS riderid,
+            rl.FullName AS fullname,
+            SUM(
+                CASE WHEN w.Moto1 = 1 THEN 1 ELSE 0 END
+              + CASE WHEN w.Moto2 = 1 THEN 1 ELSE 0 END
+              + CASE WHEN w.Moto3 = 1 THEN 1 ELSE 0 END
+            ) AS moto_wins
+        FROM WMX_OVERALLS w
+        JOIN Rider_List rl ON rl.RiderID = w.riderid
+        GROUP BY w.riderid, rl.FullName
+        HAVING SUM(
+            CASE WHEN w.Moto1 = 1 THEN 1 ELSE 0 END
+          + CASE WHEN w.Moto2 = 1 THEN 1 ELSE 0 END
+          + CASE WHEN w.Moto3 = 1 THEN 1 ELSE 0 END
+        ) > 0
+        ORDER BY moto_wins DESC, rl.FullName;
+    """
+
     try:
         with pyodbc.connect(CONN_STR) as conn:
             cursor = conn.cursor()
@@ -327,7 +400,13 @@ ORDER BY moto_wins DESC;
                 for row in cursor.fetchall()
             ]
 
-        return {"supercross": supercross, "motocross": motocross, "smx": smx}
+            cursor.execute(wmx_query)
+            wmx = [
+                {"riderid": row.riderid, "fullname": row.fullname, "moto_wins": row.moto_wins}
+                for row in cursor.fetchall()
+            ]
+
+        return {"supercross": supercross, "motocross": motocross, "smx": smx, "wmx": wmx}
 
     except Exception as e:
         raise_http_error("Failed to load heat and moto wins leaderboard.", e)

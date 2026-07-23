@@ -19,22 +19,33 @@ def search(q: str):
         SELECT TOP 8 RiderID, FullName, Country
         FROM Rider_List
         WHERE FullName LIKE ?
+          AND COALESCE(WMX, 0) <> 1
+        ORDER BY
+            CASE WHEN FullName LIKE ? THEN 0 ELSE 1 END,
+            FullName
+    """
+
+    wmx_riders_query = """
+        SELECT TOP 8 RiderID, FullName, Country
+        FROM Rider_List
+        WHERE FullName LIKE ?
+          AND WMX = 1
         ORDER BY
             CASE WHEN FullName LIKE ? THEN 0 ELSE 1 END,
             FullName
     """
 
     tracks_query = """
-    SELECT TOP 8
+    SELECT TOP 12
         rt.TrackID,
         rt.TrackName,
         tt.State,
         rt.SportID
     FROM Race_Table rt
-    JOIN TrackTable tt
+    LEFT JOIN TrackTable tt
         ON rt.TrackID = tt.TrackID
     WHERE rt.TrackName LIKE ?
-      AND rt.SportID IN (1, 2)
+      AND rt.SportID IN (1, 2, 4)
     GROUP BY
         rt.TrackID,
         rt.TrackName,
@@ -47,10 +58,12 @@ def search(q: str):
 
     with engine.connect() as conn:
         riders = conn.exec_driver_sql(riders_query, (like, starts)).mappings().all()
+        wmx_riders = conn.exec_driver_sql(wmx_riders_query, (like, starts)).mappings().all()
         tracks = conn.exec_driver_sql(tracks_query, (like, starts)).mappings().all()
 
     return {
         "riders": [dict(r) for r in riders],
+        "wmx_riders": [dict(r) for r in wmx_riders],
         "tracks": [dict(t) for t in tracks],
     }
 
