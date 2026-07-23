@@ -353,6 +353,7 @@ def _get_rider_accolades(cursor, rider_id: int):
                 WHEN 1 THEN 1
                 WHEN 2 THEN 2
                 WHEN 3 THEN 3
+                WHEN 4 THEN 4
                 ELSE 9
             END,
             CASE ClassID
@@ -369,6 +370,7 @@ def _get_rider_accolades(cursor, rider_id: int):
         1: "SX",
         2: "MX",
         3: "SMX",
+        4: "WMX",
     }
     class_labels = {
         1: "450",
@@ -379,17 +381,24 @@ def _get_rider_accolades(cursor, rider_id: int):
     accolades = []
     for row in cursor.fetchall():
         sport_label = sport_labels.get(row.SportID)
-        class_label = class_labels.get(row.ClassID)
-        if not sport_label or not class_label:
+        if not sport_label:
             continue
 
         championship_label = "Championship" if row.Titles == 1 else "Championships"
+        if row.SportID == 4:
+            label = f"{row.Titles}x WMX {championship_label}"
+        else:
+            class_label = class_labels.get(row.ClassID)
+            if not class_label:
+                continue
+            label = f"{row.Titles}x {class_label} {sport_label} {championship_label}"
+
         accolades.append(
             {
                 "sport_id": row.SportID,
                 "class_id": row.ClassID,
                 "titles": row.Titles,
-                "label": f"{row.Titles}x {class_label} {sport_label} {championship_label}",
+                "label": label,
             }
         )
 

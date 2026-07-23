@@ -360,22 +360,13 @@ ORDER BY moto_wins DESC;
 
     wmx_query = """
         SELECT
-            w.riderid AS riderid,
-            rl.FullName AS fullname,
-            SUM(
-                CASE WHEN w.Moto1 = 1 THEN 1 ELSE 0 END
-              + CASE WHEN w.Moto2 = 1 THEN 1 ELSE 0 END
-              + CASE WHEN w.Moto3 = 1 THEN 1 ELSE 0 END
-            ) AS moto_wins
-        FROM WMX_OVERALLS w
-        JOIN Rider_List rl ON rl.RiderID = w.riderid
-        GROUP BY w.riderid, rl.FullName
-        HAVING SUM(
-            CASE WHEN w.Moto1 = 1 THEN 1 ELSE 0 END
-          + CASE WHEN w.Moto2 = 1 THEN 1 ELSE 0 END
-          + CASE WHEN w.Moto3 = 1 THEN 1 ELSE 0 END
-        ) > 0
-        ORDER BY moto_wins DESC, rl.FullName;
+            c.[Year] AS [year],
+            c.RiderID AS riderid,
+            COALESCE(rl.FullName, c.FullName) AS fullname
+        FROM Champions c
+        LEFT JOIN Rider_List rl ON rl.RiderID = c.RiderID
+        WHERE c.SportID = 4
+        ORDER BY c.[Year] DESC, fullname;
     """
 
     try:
@@ -402,7 +393,7 @@ ORDER BY moto_wins DESC;
 
             cursor.execute(wmx_query)
             wmx = [
-                {"riderid": row.riderid, "fullname": row.fullname, "moto_wins": row.moto_wins}
+                {"year": row.year, "riderid": row.riderid, "fullname": row.fullname}
                 for row in cursor.fetchall()
             ]
 
