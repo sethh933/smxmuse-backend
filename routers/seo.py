@@ -82,14 +82,19 @@ def build_prerender_manifest():
                 UNION ALL SELECT RiderID, RaceID FROM dbo.WMX_OVERALLS
             ),
             RiderActivity AS (
-                SELECT RiderID, COUNT(*) AS AppearanceCount, MAX(RaceID) AS LatestRaceID
-                FROM Appearances
-                GROUP BY RiderID
+                SELECT appearances.RiderID,
+                       COUNT(*) AS AppearanceCount,
+                       MAX(races.RaceDate) AS LatestRaceDate
+                FROM Appearances appearances
+                INNER JOIN dbo.Race_Table races ON races.RaceID = appearances.RaceID
+                GROUP BY appearances.RiderID
             ),
             RankedRiders AS (
                 SELECT RiderID,
                        ROW_NUMBER() OVER (ORDER BY AppearanceCount DESC, RiderID DESC) AS CareerRank,
-                       ROW_NUMBER() OVER (ORDER BY LatestRaceID DESC, RiderID DESC) AS RecentRank
+                       ROW_NUMBER() OVER (
+                           ORDER BY LatestRaceDate DESC, AppearanceCount DESC, RiderID DESC
+                       ) AS RecentRank
                 FROM RiderActivity
             )
             SELECT rl.RiderID, rl.FullName, rl.Country, rl.ImageURL,
@@ -195,6 +200,38 @@ def build_prerender_manifest():
         if rider["ImageURL"]:
             person["image"] = rider["ImageURL"]
         pages.append(_page(path, f"{name} Rider Profile and Career Stats", description, name, page_type="profile", json_ld=person))
+
+        # Use the remaining Azure deployment headroom for the most valuable
+        # rider detail routes, which target high-intent results and standings
+        # searches and otherwise depend on client-side canonical injection.
+        if int(rider["CareerRank"]) <= 100 or int(rider["RecentRank"]) <= 50:
+            results_path = f"{path}/results"
+            results_description = (
+                f"Browse {name}'s race-by-race Supercross and Motocross career results, "
+                "including track history and filtered event results."
+            )
+            pages.append(_page(
+                results_path,
+                f"{name} Career Results",
+                results_description,
+                name,
+                results_description,
+                page_type="profile",
+            ))
+
+            points_path = f"{path}/points"
+            points_description = (
+                f"View {name}'s Supercross, Motocross, SMX, and WMX championship "
+                "finishes and points standings history on smxmuse."
+            )
+            pages.append(_page(
+                points_path,
+                f"{name} Points Standings History",
+                points_description,
+                name,
+                points_description,
+                page_type="profile",
+            ))
 
     for race in races:
         if int(race["PrerenderRank"]) > 350:
@@ -391,6 +428,8 @@ def build_sitemap_xml():
         slug = _slugify(rider["FullName"])
         segment = f"{slug}-{rider_id}" if slug else str(rider_id)
         _add_url(urlset, f"/rider/{segment}")
+        _add_url(urlset, f"/rider/{segment}/results")
+        _add_url(urlset, f"/rider/{segment}/points")
 
     for race in races:
         race_id = race["RaceID"]
