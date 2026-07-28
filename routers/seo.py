@@ -116,7 +116,7 @@ def build_prerender_manifest():
 
         races = conn.execute(text("""
             SELECT rt.RaceID, rt.[Year], rt.Round, rt.TrackName, rt.SportID,
-                   rt.RaceDate, tt.City,
+                   rt.RaceDate, tt.City, tt.State,
                    ROW_NUMBER() OVER (ORDER BY rt.RaceDate DESC, rt.RaceID DESC) AS PrerenderRank
             FROM dbo.Race_Table rt
             LEFT JOIN dbo.TrackTable tt ON tt.TrackID = rt.TrackID
@@ -248,6 +248,17 @@ def build_prerender_manifest():
         }
         if race["RaceDate"]:
             event["startDate"] = _lastmod(race["RaceDate"])
+        if race["City"] or race["State"]:
+            address = {"@type": "PostalAddress"}
+            if race["City"]:
+                address["addressLocality"] = race["City"]
+            if race["State"]:
+                address["addressRegion"] = race["State"]
+            event["location"] = {
+                "@type": "Place",
+                "name": race["TrackName"],
+                "address": address,
+            }
         pages.append(_page(path, f"{race['Year']} {display_name} {sport} Results", description, race["TrackName"], page_type="article", json_ld=event))
 
     for track in tracks:

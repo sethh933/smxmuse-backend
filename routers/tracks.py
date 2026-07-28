@@ -357,6 +357,7 @@ def get_race_header(raceid: int):
         rt.RaceDate,
         rt.TrackName,
         tt.City,
+        tt.State,
         tt.Indoors,
         rt.SportID,
         rt.CoastID,
