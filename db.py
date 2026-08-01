@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from pathlib import Path
+import logging
 import os
+import time
 
 import pyodbc
 from dotenv import load_dotenv
@@ -68,9 +70,52 @@ CONN_STR = (
     f"MARS_Connection={SQL_MARS};"
 )
 
+SQL_CONNECT_TIMEOUT = max(1, int(os.getenv("SQL_CONNECT_TIMEOUT", "5")))
+SQL_CONNECT_MAX_ATTEMPTS = max(1, int(os.getenv("SQL_CONNECT_MAX_ATTEMPTS", "3")))
+SQL_CONNECT_RETRY_DELAYS = (0.25, 0.75)
+TRANSIENT_SQL_CONNECT_MARKERS = (
+    "HYT00",
+    "HYT01",
+    "08001",
+    "08S01",
+    "40613",
+    "40197",
+    "40501",
+    "49918",
+    "49919",
+    "49920",
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _is_transient_connect_error(error: pyodbc.Error) -> bool:
+    message = " ".join(str(arg) for arg in error.args).upper()
+    return any(marker in message for marker in TRANSIENT_SQL_CONNECT_MARKERS)
+
+
+def connect_db():
+    """Open a SQL connection, retrying only transient login/network failures."""
+    for attempt in range(1, SQL_CONNECT_MAX_ATTEMPTS + 1):
+        try:
+            return pyodbc.connect(CONN_STR, timeout=SQL_CONNECT_TIMEOUT)
+        except pyodbc.Error as error:
+            if attempt >= SQL_CONNECT_MAX_ATTEMPTS or not _is_transient_connect_error(error):
+                raise
+
+            delay = SQL_CONNECT_RETRY_DELAYS[min(attempt - 1, len(SQL_CONNECT_RETRY_DELAYS) - 1)]
+            logger.warning(
+                "Transient SQL connection failure on attempt %s/%s; retrying in %.2fs: %s",
+                attempt,
+                SQL_CONNECT_MAX_ATTEMPTS,
+                delay,
+                error,
+            )
+            time.sleep(delay)
+
 engine = create_engine(
     "mssql+pyodbc://",
-    creator=lambda: pyodbc.connect(CONN_STR),
+    creator=connect_db,
     pool_pre_ping=True,
 )
 

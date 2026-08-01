@@ -1,7 +1,6 @@
-import pyodbc
 from fastapi import APIRouter
 
-from db import CONN_STR, fetch_all
+from db import connect_db, fetch_all
 from error_utils import raise_http_error
 
 
@@ -450,7 +449,7 @@ def _build_qualifying_session_detail(rows, rank_rows, riderid: int):
 
 @router.get("/api/race/overalls")
 def get_mx_overalls(raceid: int, classid: int, sport_id: int = 2):
-    with pyodbc.connect(CONN_STR) as conn:
+    with connect_db() as conn:
         cursor = conn.cursor()
 
         if sport_id == 4:
@@ -517,7 +516,7 @@ def get_mx_overalls(raceid: int, classid: int, sport_id: int = 2):
 
 @router.get("/api/race/smx-motos")
 def get_smx_motos(raceid: int, classid: int, moto: int):
-    with pyodbc.connect(CONN_STR) as conn:
+    with connect_db() as conn:
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -553,7 +552,7 @@ def get_smx_motos(raceid: int, classid: int, moto: int):
 
 @router.get("/api/race/mx-motos")
 def get_mx_motos(raceid: int, classid: int, moto: int):
-    with pyodbc.connect(CONN_STR) as conn:
+    with connect_db() as conn:
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -737,7 +736,7 @@ def get_wmx_moto_rider_details(
 
 @router.get("/api/race/consi")
 def get_mx_consi(raceid: int, classid: int):
-    with pyodbc.connect(CONN_STR) as conn:
+    with connect_db() as conn:
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -908,7 +907,7 @@ def get_legacy_mx_sessions(raceid: int):
 
 @router.get("/api/race/smx-wildcard")
 def get_smx_wildcard(raceid: int, classid: int):
-    with pyodbc.connect(CONN_STR) as conn:
+    with connect_db() as conn:
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -986,7 +985,7 @@ def get_qualifying(raceid: int, classid: int, sport_id: int):
                 "classid": classid
             })
 
-        with pyodbc.connect(CONN_STR) as conn:
+        with connect_db() as conn:
             cursor = conn.cursor()
 
             qual_table = "SMX_QUAL" if sport_id == 3 else "MX_QUAL"

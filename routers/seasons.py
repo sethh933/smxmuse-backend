@@ -1,7 +1,6 @@
-import pyodbc
 from fastapi import APIRouter, HTTPException
 
-from db import CONN_STR, fetch_all
+from db import connect_db, fetch_all
 from error_utils import raise_http_error
 
 
@@ -1799,7 +1798,7 @@ def get_smx_season_points_progression(year: int, classid: int):
 @router.get("/api/years")
 def get_years(sport_id: int):
     try:
-        with pyodbc.connect(CONN_STR) as conn:
+        with connect_db() as conn:
             cursor = conn.cursor()
 
             cursor.execute("""
@@ -1819,7 +1818,7 @@ def get_years(sport_id: int):
 
 @router.get("/api/races")
 def get_races(sport_id: int, year: int):
-    with pyodbc.connect(CONN_STR) as conn:
+    with connect_db() as conn:
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -1854,7 +1853,7 @@ def get_races(sport_id: int, year: int):
 
 @router.get("/api/season-champions")
 def get_season_champions(sport_id: int, year: int):
-    with pyodbc.connect(CONN_STR) as conn:
+    with connect_db() as conn:
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -1898,7 +1897,7 @@ def get_season_champions(sport_id: int, year: int):
 @router.get("/season/current")
 def get_current_season():
     try:
-        with pyodbc.connect(CONN_STR) as conn:
+        with connect_db() as conn:
             cursor = conn.cursor()
 
             cursor.execute("""

@@ -8,8 +8,6 @@ from pathlib import Path
 import sys
 from urllib.request import Request, urlopen
 
-import pyodbc
-
 BASE_DIR = Path(__file__).resolve().parent.parent
 SQL_PATHS = (
     BASE_DIR / "sql" / "refresh_rider_profile_summaries.sql",
@@ -19,7 +17,7 @@ SQL_PATHS = (
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from db import CONN_STR, GRID_CACHE_REFRESH_URL
+from db import GRID_CACHE_REFRESH_URL, connect_db
 
 
 def _split_batches(sql_text: str):
@@ -43,7 +41,7 @@ def _split_batches(sql_text: str):
 
 
 def refresh_rider_profile_summaries():
-    with pyodbc.connect(CONN_STR) as conn:
+    with connect_db() as conn:
         conn.autocommit = False
         cursor = conn.cursor()
 

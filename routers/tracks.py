@@ -1,8 +1,7 @@
-import pyodbc
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import text
 
-from db import CONN_STR, engine, fetch_all
+from db import connect_db, engine, fetch_all
 from error_utils import raise_http_error
 
 
@@ -287,7 +286,7 @@ def get_track_profile(track_id: int, sport_id: int, class_id: int):
         raise HTTPException(status_code=400, detail="Invalid sport_id")
 
     try:
-        with pyodbc.connect(CONN_STR) as conn:
+        with connect_db() as conn:
             cursor = conn.cursor()
             cursor.execute(query, track_id, class_id)
 

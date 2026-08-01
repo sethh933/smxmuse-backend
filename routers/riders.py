@@ -5,9 +5,9 @@ from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
 
 from db import (
-    CONN_STR,
     FEATURED_RIDERS_CACHE,
     RIDER_OF_THE_DAY_CACHE,
+    connect_db,
     compute_featured_riders,
     compute_rider_of_the_day,
     engine,
@@ -2337,7 +2337,7 @@ ORDER BY CASE WHEN [Year] IS NULL THEN 1 ELSE 0 END, [Year],
 @router.get("/rider/{rider_id}/profile")
 def get_rider_profile(rider_id: int, sport: str = "SX"):
     try:
-        with pyodbc.connect(CONN_STR) as conn:
+        with connect_db() as conn:
             cursor = conn.cursor()
             rider_data, has_sx, has_mx, has_smx, has_wmx = _get_rider_identity_and_availability(cursor, rider_id)
             number_history = _get_rider_number_history(cursor, rider_id)
@@ -2590,7 +2590,7 @@ def get_country(country: str):
 @router.get("/rider/{rider_id}/points")
 def get_rider_points_standings(rider_id: int):
     try:
-        with pyodbc.connect(CONN_STR) as conn:
+        with connect_db() as conn:
             cursor = conn.cursor()
 
             summary_results = _get_rider_points_from_summary(cursor, rider_id)
@@ -2766,7 +2766,7 @@ ORDER BY
 @router.get("/rider/{rider_id}/race-results")
 def get_rider_race_results(rider_id: int):
     try:
-        with pyodbc.connect(CONN_STR) as conn:
+        with connect_db() as conn:
             cursor = conn.cursor()
 
             cursor.execute(

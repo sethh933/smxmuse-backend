@@ -1,9 +1,8 @@
 from typing import List
 
-import pyodbc
 from fastapi import APIRouter, Query
 
-from db import CONN_STR
+from db import connect_db
 from error_utils import raise_http_error
 
 
@@ -75,7 +74,7 @@ ORDER BY wins DESC;
     """
 
     try:
-        with pyodbc.connect(CONN_STR) as conn:
+        with connect_db() as conn:
             cursor = conn.cursor()
 
             cursor.execute(sx_query, class_ids)
@@ -173,7 +172,7 @@ ORDER BY podiums DESC;
     """
 
     try:
-        with pyodbc.connect(CONN_STR) as conn:
+        with connect_db() as conn:
             cursor = conn.cursor()
 
             cursor.execute(sx_query, class_ids)
@@ -267,7 +266,7 @@ ORDER BY starts DESC;
     """
 
     try:
-        with pyodbc.connect(CONN_STR) as conn:
+        with connect_db() as conn:
             cursor = conn.cursor()
 
             cursor.execute(sx_query, class_ids)
@@ -370,7 +369,7 @@ ORDER BY moto_wins DESC;
     """
 
     try:
-        with pyodbc.connect(CONN_STR) as conn:
+        with connect_db() as conn:
             cursor = conn.cursor()
 
             cursor.execute(sx_query, class_ids)
