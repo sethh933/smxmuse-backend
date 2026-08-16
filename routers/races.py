@@ -564,13 +564,25 @@ def get_mx_motos(raceid: int, classid: int, moto: int):
                 mm.Interval AS Interval,
                 mm.BestLap AS BestLap,
                 mm.Start AS Start,
-                mm.Holeshot AS Holeshot,
+                mm.HoleshotPos AS HoleshotLine,
+                COALESCE(
+                    CASE
+                        WHEN mm.Moto = 1 THEN mo.M1_Holeshot
+                        WHEN mm.Moto = 2 THEN mo.M2_Holeshot
+                    END,
+                    mm.Holeshot
+                ) AS Holeshot,
                 mm.RaceStatus AS RaceStatus,
                 rl.ImageURL AS ImageURL,
                 rl.Country AS Country
             FROM MX_MOTOS mm
             LEFT JOIN Rider_List rl
                 ON rl.RiderID = mm.RiderID
+            LEFT JOIN MX_OVERALLS mo
+                ON mo.RaceID = mm.RaceID
+               AND mo.ClassID = mm.ClassID
+               AND mo.RiderID = mm.RiderID
+               AND mo.Sport_ID = 2
             WHERE mm.raceid = ?
               AND mm.classid = ?
               AND mm.Moto = ?
