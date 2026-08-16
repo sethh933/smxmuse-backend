@@ -751,12 +751,29 @@ def get_mx_consi(raceid: int, classid: int):
     with connect_db() as conn:
         cursor = conn.cursor()
 
-        cursor.execute("""
+        consi_columns = {
+            row.column_name.lower()
+            for row in cursor.columns(table="MX_CONSIS", schema="dbo")
+        }
+        holeshot_pos_select = (
+            "mc.HoleshotPos" if "holeshotpos" in consi_columns else "NULL"
+        )
+        race_status_select = (
+            "mc.RaceStatus" if "racestatus" in consi_columns else "NULL"
+        )
+
+        cursor.execute(f"""
             SELECT
                 mc.Result AS Result,
                 mc.riderid AS riderid,
                 COALESCE(rl.FullName, mc.FullName) AS FullName,
                 mc.Brand AS Brand,
+                mc.Interval AS Interval,
+                mc.BestLap AS BestLap,
+                mc.Start AS Start,
+                {holeshot_pos_select} AS HoleshotLine,
+                mc.Holeshot AS Holeshot,
+                {race_status_select} AS RaceStatus,
                 rl.ImageURL AS ImageURL,
                 rl.Country AS Country
             FROM MX_CONSIS mc
