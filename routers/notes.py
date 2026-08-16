@@ -689,7 +689,40 @@ def list_public_notes(category: Optional[str] = None, race_id: Optional[int] = N
         params["category"] = category
 
     if race_id:
-        filters.append("RaceID = :race_id")
+        filters.append("""
+            RaceID IN (
+                SELECT related.RaceID
+                FROM dbo.Race_Table requested
+                JOIN dbo.Race_Table related
+                  ON related.[Year] = requested.[Year]
+                 AND related.TrackID = requested.TrackID
+                 AND (
+                      related.RaceID = requested.RaceID
+                      OR (
+                          requested.SportID = 4
+                          AND related.SportID = 2
+                          AND ABS(DATEDIFF(DAY, related.RaceDate, requested.RaceDate)) <= 1
+                      )
+                 )
+                WHERE requested.RaceID = :race_id
+            )
+        """)
+        filters.append("""
+            (
+                NOT EXISTS (
+                    SELECT 1
+                    FROM dbo.Race_Table requested_wmx
+                    WHERE requested_wmx.RaceID = :race_id
+                      AND requested_wmx.SportID = 4
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM dbo.ContentNoteSections wmx_section
+                    WHERE wmx_section.NoteID = notes.NoteID
+                      AND LOWER(LTRIM(RTRIM(wmx_section.Heading))) IN ('wmx', 'wmx class')
+                )
+            )
+        """)
         params["race_id"] = race_id
 
     with engine.connect() as conn:
@@ -708,7 +741,7 @@ def list_public_notes(category: Optional[str] = None, race_id: Optional[int] = N
                 Tags,
                 InstagramUrl,
                 Status
-            FROM dbo.ContentNotes
+            FROM dbo.ContentNotes notes
             WHERE {' AND '.join(filters)}
             ORDER BY PublishDate DESC, NoteID DESC
         """), params).mappings().all()
