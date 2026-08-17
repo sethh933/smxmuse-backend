@@ -57,7 +57,16 @@ def _add_url(urlset, path, last_modified=None):
         ET.SubElement(url, "lastmod").text = normalized_lastmod
 
 
-def _page(path, title, description, heading=None, body=None, page_type="website", json_ld=None):
+def _page(
+    path,
+    title,
+    description,
+    heading=None,
+    body=None,
+    page_type="website",
+    json_ld=None,
+    image=None,
+):
     page = {
         "path": path,
         "title": title,
@@ -68,6 +77,8 @@ def _page(path, title, description, heading=None, body=None, page_type="website"
     }
     if json_ld:
         page["jsonLd"] = json_ld
+    if image:
+        page["image"] = image
     return page
 
 
@@ -191,15 +202,24 @@ def build_prerender_manifest():
         if int(rider["CareerRank"]) > 600 and int(rider["RecentRank"]) > 350:
             continue
         name = rider["FullName"].strip()
+        rider_image = rider["ImageURL"].strip() if rider["ImageURL"] else None
         slug = _slugify(name)
         path = f"/rider/{slug}-{rider['RiderID']}" if slug else f"/rider/{rider['RiderID']}"
         description = f"Explore {name}'s Supercross, Motocross, SMX, and WMX career stats, results history, qualifying numbers, and points totals on smxmuse."
         person = {"@context": "https://schema.org", "@type": "Person", "name": name, "url": _absolute_url(path)}
         if rider["Country"]:
             person["nationality"] = rider["Country"].strip()
-        if rider["ImageURL"]:
-            person["image"] = rider["ImageURL"]
-        pages.append(_page(path, f"{name} Rider Profile and Career Stats", description, name, page_type="profile", json_ld=person))
+        if rider_image:
+            person["image"] = rider_image
+        pages.append(_page(
+            path,
+            f"{name} Rider Profile and Career Stats",
+            description,
+            name,
+            page_type="profile",
+            json_ld=person,
+            image=rider_image,
+        ))
 
         # Use the remaining Azure deployment headroom for the most valuable
         # rider detail routes, which target high-intent results and standings
@@ -217,6 +237,7 @@ def build_prerender_manifest():
                 name,
                 results_description,
                 page_type="profile",
+                image=rider_image,
             ))
 
             points_path = f"{path}/points"
@@ -231,6 +252,7 @@ def build_prerender_manifest():
                 name,
                 points_description,
                 page_type="profile",
+                image=rider_image,
             ))
 
     for race in races:
