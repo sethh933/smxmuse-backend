@@ -205,7 +205,10 @@ def build_prerender_manifest():
         rider_image = rider["ImageURL"].strip() if rider["ImageURL"] else None
         slug = _slugify(name)
         path = f"/rider/{slug}-{rider['RiderID']}" if slug else f"/rider/{rider['RiderID']}"
-        description = f"Explore {name}'s Supercross, Motocross, SMX, and WMX career stats, results history, qualifying numbers, and points totals on smxmuse."
+        description = (
+            f"Explore {name}'s career stats, results history, and championship history "
+            "on smxmuse."
+        )
         person = {"@context": "https://schema.org", "@type": "Person", "name": name, "url": _absolute_url(path)}
         if rider["Country"]:
             person["nationality"] = rider["Country"].strip()
