@@ -1906,7 +1906,8 @@ def get_current_season():
                     Year
                 FROM Race_Table
                 WHERE RaceDate <= GETDATE()
-                ORDER BY RaceDate DESC
+                  AND SportID IN (1, 2, 3)
+                ORDER BY RaceDate DESC, RaceID DESC
             """)
 
             row = cursor.fetchone()
