@@ -66,6 +66,8 @@ def _page(
     page_type="website",
     json_ld=None,
     image=None,
+    schedule=None,
+    result_sections=None,
 ):
     page = {
         "path": path,
@@ -79,6 +81,10 @@ def _page(
         page["jsonLd"] = json_ld
     if image:
         page["image"] = image
+    if schedule:
+        page["schedule"] = schedule
+    if result_sections:
+        page["resultSections"] = result_sections
     return page
 
 
@@ -132,6 +138,67 @@ def build_prerender_manifest():
             FROM dbo.Race_Table rt
             LEFT JOIN dbo.TrackTable tt ON tt.TrackID = rt.TrackID
             WHERE rt.SportID IN (1, 2, 3, 4)
+        """)).mappings().all()
+
+        race_results = conn.execute(text("""
+            WITH PrerenderRaces AS (
+                SELECT RaceID
+                FROM (
+                    SELECT rt.RaceID,
+                           ROW_NUMBER() OVER (
+                               ORDER BY rt.RaceDate DESC, rt.RaceID DESC
+                           ) AS PrerenderRank
+                    FROM dbo.Race_Table rt
+                    WHERE rt.SportID IN (1, 2, 3, 4)
+                ) ranked
+                WHERE ranked.PrerenderRank <= 350
+            ), CombinedResults AS (
+                SELECT sx.RaceID, 1 AS SportID, sx.ClassID,
+                       TRY_CONVERT(int, sx.Result) AS FinishPosition,
+                       sx.RiderID, COALESCE(rl.FullName, sx.FullName) AS FullName,
+                       sx.Brand, NULL AS Moto1, NULL AS Moto2
+                FROM dbo.SX_MAINS sx
+                INNER JOIN PrerenderRaces pr ON pr.RaceID = sx.RaceID
+                LEFT JOIN dbo.Rider_List rl ON rl.RiderID = sx.RiderID
+
+                UNION ALL
+
+                SELECT mx.RaceID, 2 AS SportID, mx.ClassID,
+                       TRY_CONVERT(int, mx.Result) AS FinishPosition,
+                       mx.RiderID, COALESCE(rl.FullName, mx.FullName) AS FullName,
+                       mx.Brand, TRY_CONVERT(int, mx.Moto1), TRY_CONVERT(int, mx.Moto2)
+                FROM dbo.MX_OVERALLS mx
+                INNER JOIN PrerenderRaces pr ON pr.RaceID = mx.RaceID
+                LEFT JOIN dbo.Rider_List rl ON rl.RiderID = mx.RiderID
+
+                UNION ALL
+
+                SELECT smx.RaceID, 3 AS SportID, smx.ClassID,
+                       TRY_CONVERT(int, smx.Result) AS FinishPosition,
+                       smx.RiderID, COALESCE(rl.FullName, smx.FullName) AS FullName,
+                       smx.Brand, TRY_CONVERT(int, smx.Moto1), TRY_CONVERT(int, smx.Moto2)
+                FROM dbo.SMX_OVERALLS smx
+                INNER JOIN PrerenderRaces pr ON pr.RaceID = smx.RaceID
+                LEFT JOIN dbo.Rider_List rl ON rl.RiderID = smx.RiderID
+
+                UNION ALL
+
+                SELECT wmx.RaceID, 4 AS SportID, 4 AS ClassID,
+                       TRY_CONVERT(int, wmx.Result) AS FinishPosition,
+                       wmx.RiderID, COALESCE(rl.FullName, wmx.FullName) AS FullName,
+                       wmx.Brand, TRY_CONVERT(int, wmx.Moto1), TRY_CONVERT(int, wmx.Moto2)
+                FROM dbo.WMX_OVERALLS wmx
+                INNER JOIN PrerenderRaces pr ON pr.RaceID = wmx.RaceID
+                LEFT JOIN dbo.Rider_List rl ON rl.RiderID = wmx.RiderID
+                WHERE wmx.SportID = 4
+            )
+            SELECT RaceID, SportID, ClassID, FinishPosition, RiderID,
+                   FullName, Brand, Moto1, Moto2
+            FROM CombinedResults
+            WHERE FinishPosition >= 1
+              AND FullName IS NOT NULL
+              AND LTRIM(RTRIM(FullName)) <> ''
+            ORDER BY RaceID, ClassID, FinishPosition
         """)).mappings().all()
 
         tracks = conn.execute(text("""
@@ -194,6 +261,57 @@ def build_prerender_manifest():
         _page("/compare", "Compare Supercross, Motocross, SMX, and WMX Riders",
               "Compare Supercross, Motocross, SMX, and WMX riders head to head across career wins, podiums, starts, championships, and season statistics.", "Rider Comparison"),
     ]
+
+    races_by_season = {}
+    race_paths = {}
+    for race in races:
+        sport_id = int(race["SportID"])
+        display_name = race["City"] if sport_id == 1 and race["City"] else race["TrackName"]
+        slug = _slugify(f"{display_name} {race['Year']}")
+        race_path = f"/race/{slug}-{race['RaceID']}" if slug else f"/race/{race['RaceID']}"
+        race_paths[int(race["RaceID"])] = race_path
+        races_by_season.setdefault((sport_id, int(race["Year"])), []).append({
+            "raceId": int(race["RaceID"]),
+            "round": race["Round"],
+            "track": race["TrackName"],
+            "location": ", ".join(value for value in (race["City"], race["State"]) if value),
+            "date": _lastmod(race["RaceDate"]),
+            "href": race_path,
+        })
+
+    results_by_race = {}
+    for result in race_results:
+        race_id = int(result["RaceID"])
+        class_id = int(result["ClassID"])
+        rider_name = result["FullName"].strip()
+        rider_slug = _slugify(rider_name)
+        rider_path = (
+            f"/rider/{rider_slug}-{result['RiderID']}"
+            if rider_slug else f"/rider/{result['RiderID']}"
+        )
+        results_by_race.setdefault(race_id, {}).setdefault(class_id, []).append({
+            "position": int(result["FinishPosition"]),
+            "rider": rider_name,
+            "riderHref": rider_path,
+            "brand": result["Brand"] or "",
+            "moto1": result["Moto1"],
+            "moto2": result["Moto2"],
+        })
+
+    for season_races in races_by_season.values():
+        for race in season_races:
+            winners = []
+            for class_id, rows in sorted(results_by_race.get(race["raceId"], {}).items()):
+                winner = next((row for row in rows if row["position"] == 1), None)
+                if winner:
+                    winners.append({
+                        "class": {1: "450", 2: "250", 3: "500", 4: "WMX"}.get(
+                            class_id, f"Class {class_id}"
+                        ),
+                        "rider": winner["rider"],
+                        "riderHref": winner["riderHref"],
+                    })
+            race["winners"] = winners
 
     for rider in riders:
         # Azure Static Web Apps currently has unreliable production distribution
@@ -263,8 +381,7 @@ def build_prerender_manifest():
             continue
         sport = SPORT_LABELS[int(race["SportID"])]
         display_name = race["City"] if int(race["SportID"]) == 1 and race["City"] else race["TrackName"]
-        slug = _slugify(f"{display_name} {race['Year']}")
-        path = f"/race/{slug}-{race['RaceID']}" if slug else f"/race/{race['RaceID']}"
+        path = race_paths[int(race["RaceID"])]
         description = f"View round {race['Round']} results, race data, and class breakdowns from {display_name} in the {race['Year']} {sport} season."
         event = {
             "@context": "https://schema.org", "@type": "SportsEvent",
@@ -284,7 +401,29 @@ def build_prerender_manifest():
                 "name": race["TrackName"],
                 "address": address,
             }
-        pages.append(_page(path, f"{race['Year']} {display_name} {sport} Results", description, race["TrackName"], page_type="article", json_ld=event))
+        result_sections = []
+        for class_id, rows in sorted(results_by_race.get(int(race["RaceID"]), {}).items()):
+            class_label = {1: "450", 2: "250", 3: "500", 4: "WMX"}.get(class_id, f"Class {class_id}")
+            session_label = "Main Event Results" if int(race["SportID"]) == 1 else "Overall Results"
+            result_sections.append({
+                "heading": f"{class_label} {session_label}",
+                "rows": rows,
+                "showMotos": int(race["SportID"]) != 1,
+            })
+
+        if int(race["SportID"]) == 2:
+            class_names = [section["heading"].removesuffix(" Overall Results") for section in result_sections]
+            class_suffix = f" - {' & '.join(class_names)}" if class_names else ""
+            title = f"{race['Year']} {display_name} Pro Motocross Results{class_suffix}"
+            heading = f"{race['Year']} {display_name} Pro Motocross Results"
+        else:
+            title = f"{race['Year']} {display_name} {sport} Results"
+            heading = f"{race['Year']} {display_name} {sport} Results"
+
+        pages.append(_page(
+            path, title, description, heading,
+            page_type="article", json_ld=event, result_sections=result_sections,
+        ))
 
     for track in tracks:
         sport_id = int(track["SportID"])
@@ -311,9 +450,17 @@ def build_prerender_manifest():
         sport_code = SPORT_CODES[sport_id]
         sport = SPORT_LABELS[sport_id]
         year = int(row["Year"])
-        pages.append(_page(f"/results/{sport_code}/{year}", f"{year} {sport} Results",
-                           f"Browse every round from the {year} {sport} season, plus season champions and the full archive schedule.",
-                           f"{year} {sport} Results"))
+        schedule = sorted(
+            races_by_season.get((sport_id, year), []),
+            key=lambda item: (item["round"] is None, item["round"] or 0),
+        )
+        title = f"{year} AMA Pro Motocross Results, Schedule & Winners" if sport_id == 2 else f"{year} {sport} Results"
+        heading = f"{year} Pro Motocross Results" if sport_id == 2 else f"{year} {sport} Results"
+        pages.append(_page(
+            f"/results/{sport_code}/{year}", title,
+            f"Browse every round from the {year} {sport} season, plus season champions and the full archive schedule.",
+            heading, schedule=schedule,
+        ))
 
     for path in sorted(_season_paths(season_classes)):
         _, _, sport_code, year, class_slug = path.split("/")
