@@ -133,9 +133,11 @@ def _get_sx_season_main_stats_from_summary(year: int, classid: int, ridercoastid
     if ridercoastid is not None:
         query += " AND s.RiderCoastID = :ridercoastid"
 
-    query += " ORDER BY Wins DESC, AvgFinish ASC"
+    query += " ORDER BY Points DESC, Wins DESC, AvgFinish ASC"
 
-    return fetch_all(query, locals())
+    return _sort_sx_standings_with_tiebreakers(
+        fetch_all(query, locals()), year, classid, ridercoastid
+    )
 
 
 def _get_sx_season_start_stats_from_summary(year: int, classid: int, ridercoastid: int = None):
@@ -192,7 +194,9 @@ def _get_mx_season_overall_from_summary(year: int, classid: int):
         ORDER BY Points DESC
     """
 
-    return fetch_all(query, locals())
+    return _sort_mx_standings_with_tiebreakers(
+        fetch_all(query, locals()), year, classid
+    )
 
 
 def _get_mx_season_moto_qual_from_summary(year: int, classid: int):
@@ -220,8 +224,133 @@ def _get_mx_season_moto_qual_from_summary(year: int, classid: int):
     return fetch_all(query, locals())
 
 
+def _sort_mx_standings_with_tiebreakers(standings, year: int, classid: int):
+    """Apply the MX championship tiebreak rules to points standings.
+
+    Riders tied on points are compared by number of moto finishes at each
+    position (wins, seconds, thirds, and so on). If every finish count is the
+    same, the better result in the most recent moto wins the tie.
+    """
+    if len(standings) < 2:
+        return standings
+
+    moto_finishes = fetch_all(
+        """
+        SELECT
+            mo.RiderID,
+            finish.MotoNumber,
+            finish.Result
+        FROM dbo.MX_OVERALLS mo
+        JOIN dbo.Race_Table rt ON rt.RaceID = mo.RaceID
+        CROSS APPLY (VALUES (1, mo.Moto1), (2, mo.Moto2)) finish(MotoNumber, Result)
+        WHERE rt.[Year] = :year
+          AND mo.ClassID = :classid
+          AND finish.Result IS NOT NULL
+          AND finish.Result > 0
+        ORDER BY mo.RiderID, rt.RaceDate DESC, mo.RaceID DESC, finish.MotoNumber DESC
+        """,
+        {"year": year, "classid": classid},
+    )
+
+    return _sort_standings_by_finish_counts(standings, moto_finishes)
+
+
+def _sort_standings_by_finish_counts(standings, finishes):
+    """Sort points rows by finish-count hierarchy, then the latest finish."""
+    finish_counts = {}
+    last_moto_result = {}
+    max_finish = 0
+    for finish in finishes:
+        rider_id = finish["RiderID"]
+        result = int(finish["Result"])
+        rider_counts = finish_counts.setdefault(rider_id, {})
+        rider_counts[result] = rider_counts.get(result, 0) + 1
+        last_moto_result.setdefault(rider_id, result)
+        max_finish = max(max_finish, result)
+
+    def standings_key(row):
+        rider_id = row["RiderID"]
+        rider_counts = finish_counts.get(rider_id, {})
+        finish_count_key = tuple(
+            -rider_counts.get(position, 0)
+            for position in range(1, max_finish + 1)
+        )
+        return (
+            -int(row.get("Points") or 0),
+            finish_count_key,
+            last_moto_result.get(rider_id, float("inf")),
+            rider_id,
+        )
+
+    return sorted(standings, key=standings_key)
+
+
+def _sort_wmx_standings_with_tiebreakers(standings, year: int):
+    if len(standings) < 2:
+        return standings
+
+    moto_finishes = fetch_all(
+        """
+        SELECT
+            wo.riderid AS RiderID,
+            finish.MotoNumber,
+            finish.Result
+        FROM dbo.WMX_OVERALLS wo
+        JOIN dbo.Race_Table rt ON rt.RaceID = wo.raceid
+        CROSS APPLY (VALUES
+            (1, wo.Moto1), (2, wo.Moto2), (3, wo.Moto3)
+        ) finish(MotoNumber, Result)
+        WHERE rt.[Year] = :year
+          AND rt.SportID = 4
+          AND finish.Result IS NOT NULL
+          AND finish.Result > 0
+        ORDER BY wo.riderid, rt.RaceDate DESC, wo.raceid DESC, finish.MotoNumber DESC
+        """,
+        {"year": year},
+    )
+    return _sort_standings_by_finish_counts(standings, moto_finishes)
+
+
+def _sort_sx_standings_with_tiebreakers(
+    standings, year: int, classid: int, ridercoastid: int = None
+):
+    if len(standings) < 2:
+        return standings
+
+    main_finishes = fetch_all(
+        """
+        WITH CoastPoolResolved AS (
+            SELECT RiderID, [Year], MIN(RiderCoastID) AS RiderCoastID
+            FROM dbo.CoastPool
+            GROUP BY RiderID, [Year]
+        )
+        SELECT
+            sm.RiderID,
+            1 AS MotoNumber,
+            sm.Result
+        FROM dbo.SX_MAINS sm
+        JOIN dbo.Race_Table rt ON rt.RaceID = sm.RaceID
+        LEFT JOIN CoastPoolResolved cp
+          ON cp.RiderID = sm.RiderID
+         AND cp.[Year] = rt.[Year]
+        WHERE rt.[Year] = :year
+          AND rt.SportID = 1
+          AND sm.ClassID = :classid
+          AND sm.Result IS NOT NULL
+          AND sm.Result > 0
+          AND (
+              :ridercoastid IS NULL
+              OR COALESCE(sm.RiderCoastID, cp.RiderCoastID) = :ridercoastid
+          )
+        ORDER BY sm.RiderID, rt.RaceDate DESC, sm.RaceID DESC
+        """,
+        {"year": year, "classid": classid, "ridercoastid": ridercoastid},
+    )
+    return _sort_standings_by_finish_counts(standings, main_finishes)
+
+
 def _get_wmx_season_overall_from_summary(year: int):
-    return fetch_all(
+    standings = fetch_all(
         """
         SELECT RiderID, FullName, Brand, Starts, Wins, Podiums, Top5, Top10,
                BestOverall, AvgOverall, Holeshots, AvgStart, Points
@@ -231,6 +360,7 @@ def _get_wmx_season_overall_from_summary(year: int):
         """,
         {"year": year},
     )
+    return _sort_wmx_standings_with_tiebreakers(standings, year)
 
 
 def _get_wmx_season_moto_qual_from_summary(year: int):
@@ -690,9 +820,14 @@ def get_season_main_stats(
     if ridercoastid is not None:
         query += " WHERE ms.RiderCoastID = :ridercoastid"
 
-    query += " ORDER BY ms.Wins DESC, ms.AvgFinish ASC"
+    query += " ORDER BY ms.Points DESC, ms.Wins DESC, ms.AvgFinish ASC"
 
-    return fetch_all(query, locals())
+    standings = fetch_all(query, locals())
+    if sportid == 1:
+        return _sort_sx_standings_with_tiebreakers(
+            standings, year, classid, ridercoastid
+        )
+    return standings
 
 
 @router.get("/api/season/start-stats")
@@ -1120,7 +1255,9 @@ GROUP BY RiderID, FullName
 ORDER BY Points DESC
     """
 
-    return fetch_all(query, locals())
+    return _sort_mx_standings_with_tiebreakers(
+        fetch_all(query, locals()), year, classid
+    )
 
 
 @router.get("/api/mx/season/moto-qual")
@@ -1585,7 +1722,9 @@ def get_wmx_season_overall(year: int):
      AND standings.SportID = 4
     ORDER BY Points DESC, overall.Wins DESC, overall.AvgOverall ASC
     """
-    return fetch_all(query, {"year": year})
+    return _sort_wmx_standings_with_tiebreakers(
+        fetch_all(query, {"year": year}), year
+    )
 
 
 @router.get("/api/wmx/season/moto-qual")

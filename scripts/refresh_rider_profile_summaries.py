@@ -13,6 +13,7 @@ SQL_PATHS = (
     BASE_DIR / "sql" / "refresh_rider_profile_summaries.sql",
     BASE_DIR / "sql" / "setup_wmx_points_standings.sql",
     BASE_DIR / "sql" / "setup_wmx_summaries_and_indexes.sql",
+    BASE_DIR / "sql" / "apply_points_standings_tiebreakers.sql",
 )
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
