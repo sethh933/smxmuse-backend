@@ -2503,7 +2503,7 @@ def get_rider_of_the_day():
             current_row = conn.execute(
                 text(
                     """
-                    SELECT TOP 1 RiderID
+                    SELECT TOP 1 RiderID, FullName, Country, ImageURL
                     FROM dbo.ROTD
                     WHERE ROTDDate = :target_date
                     """
@@ -2511,9 +2511,8 @@ def get_rider_of_the_day():
                 {"target_date": today_utc},
             ).fetchone()
 
-        cached_rider_id = RIDER_OF_THE_DAY_CACHE["data"].get("RiderID")
-        db_rider_id = current_row.RiderID if current_row else None
-        should_refresh = db_rider_id != cached_rider_id
+        current_data = dict(current_row._mapping) if current_row else None
+        should_refresh = current_data != RIDER_OF_THE_DAY_CACHE["data"]
 
     if should_refresh:
         RIDER_OF_THE_DAY_CACHE["data"] = compute_rider_of_the_day()
