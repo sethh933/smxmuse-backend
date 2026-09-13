@@ -662,6 +662,125 @@ def get_mx_moto_rider_details(raceid: int, classid: int, moto: int, riderid: int
     return _build_lap_segment_detail(rows, rank_rows, riderid)
 
 
+@router.get("/api/race/smx-moto-rider-details")
+def get_smx_moto_rider_details(raceid: int, classid: int, moto: int, riderid: int):
+    params = {
+        "raceid": raceid,
+        "classid": classid,
+        "moto": moto,
+        "riderid": riderid,
+    }
+    rows = fetch_all("""
+        SELECT
+            mms.LAP      AS lap,
+            mms.riderid  AS riderid,
+            mms.LAPTIME  AS laptime,
+            mms.position AS position,
+            mms.SEG_1    AS seg_1,
+            mms.SEG_2    AS seg_2,
+            mms.SEG_3    AS seg_3,
+            mms.SEG_4    AS seg_4,
+            mms.SEG_5    AS seg_5,
+            mms.SEG_6    AS seg_6,
+            mms.SEG_7    AS seg_7,
+            mms.SEG_8    AS seg_8,
+            mms.SEG_9    AS seg_9,
+            mms.SEG_10   AS seg_10
+        FROM dbo.SMX_MOTO_SEGMENTS mms
+        WHERE mms.raceid = :raceid
+          AND mms.classid = :classid
+          AND mms.Moto = :moto
+          AND mms.riderid = :riderid
+          AND mms.sportid = 3
+        ORDER BY mms.LAP
+    """, params)
+    rank_rows = fetch_all("""
+        SELECT
+            mms.LAP     AS lap,
+            mms.riderid AS riderid,
+            mms.LAPTIME AS laptime,
+            mm.RaceStatus AS race_status,
+            mms.SEG_1   AS seg_1,
+            mms.SEG_2   AS seg_2,
+            mms.SEG_3   AS seg_3,
+            mms.SEG_4   AS seg_4,
+            mms.SEG_5   AS seg_5,
+            mms.SEG_6   AS seg_6,
+            mms.SEG_7   AS seg_7,
+            mms.SEG_8   AS seg_8,
+            mms.SEG_9   AS seg_9,
+            mms.SEG_10  AS seg_10
+        FROM dbo.SMX_MOTO_SEGMENTS mms
+        LEFT JOIN dbo.SMX_MOTOS mm
+          ON mm.raceid = mms.raceid
+         AND mm.classid = mms.classid
+         AND mm.Moto = mms.Moto
+         AND mm.riderid = mms.riderid
+         AND mm.sportid = mms.sportid
+        WHERE mms.raceid = :raceid
+          AND mms.classid = :classid
+          AND mms.Moto = :moto
+          AND mms.sportid = 3
+    """, params)
+
+    return _build_lap_segment_detail(rows, rank_rows, riderid)
+
+
+@router.get("/api/race/smx-lcq-rider-details")
+def get_smx_lcq_rider_details(raceid: int, classid: int, riderid: int):
+    params = {
+        "raceid": raceid,
+        "classid": classid,
+        "riderid": riderid,
+    }
+    rows = fetch_all("""
+        SELECT
+            mms.LAP      AS lap,
+            mms.riderid  AS riderid,
+            mms.LAPTIME  AS laptime,
+            mms.position AS position,
+            mms.SEG_1    AS seg_1,
+            mms.SEG_2    AS seg_2,
+            mms.SEG_3    AS seg_3,
+            mms.SEG_4    AS seg_4,
+            mms.SEG_5    AS seg_5,
+            mms.SEG_6    AS seg_6,
+            mms.SEG_7    AS seg_7,
+            mms.SEG_8    AS seg_8,
+            mms.SEG_9    AS seg_9,
+            mms.SEG_10   AS seg_10
+        FROM dbo.SMX_LCQ_SEGMENTS mms
+        WHERE mms.raceid = :raceid
+          AND mms.classid = :classid
+          AND mms.riderid = :riderid
+          AND mms.sportid = 3
+        ORDER BY mms.LAP
+    """, params)
+    rank_rows = fetch_all("""
+        SELECT
+            mms.LAP     AS lap,
+            mms.riderid AS riderid,
+            mms.LAPTIME AS laptime,
+            NULL AS race_status,
+            mms.SEG_1   AS seg_1,
+            mms.SEG_2   AS seg_2,
+            mms.SEG_3   AS seg_3,
+            mms.SEG_4   AS seg_4,
+            mms.SEG_5   AS seg_5,
+            mms.SEG_6   AS seg_6,
+            mms.SEG_7   AS seg_7,
+            mms.SEG_8   AS seg_8,
+            mms.SEG_9   AS seg_9,
+            mms.SEG_10  AS seg_10
+        FROM dbo.SMX_LCQ_SEGMENTS mms
+        WHERE mms.raceid = :raceid
+          AND mms.classid = :classid
+          AND mms.sportid = 3
+    """, params)
+
+    return _build_lap_segment_detail(rows, rank_rows, riderid)
+
+
 @router.get("/api/race/wmx-motos")
 def get_wmx_motos(raceid: int, moto: int):
     return fetch_all("""
@@ -1092,6 +1211,54 @@ def get_mx_qualifying_rider_details(raceid: int, classid: int, riderid: int):
         WHERE mqs.raceid = :raceid
           AND mqs.classid = :classid
           AND mqs.sportid = 2
+    """, params)
+
+    return _build_qualifying_session_detail(rows, rank_rows, riderid)
+
+
+@router.get("/api/race/smx-qualifying-rider-details")
+def get_smx_qualifying_rider_details(raceid: int, classid: int, riderid: int):
+    params = {
+        "raceid": raceid,
+        "classid": classid,
+        "riderid": riderid,
+    }
+    query_columns = """
+        mqs.[Group]  AS [group],
+        mqs.[Session] AS session,
+        mqs.Lap      AS lap,
+        mqs.riderid  AS riderid,
+        mqs.Laptime  AS laptime,
+        mqs.SEG_1    AS seg_1,
+        mqs.SEG_2    AS seg_2,
+        mqs.SEG_3    AS seg_3,
+        mqs.SEG_4    AS seg_4,
+        mqs.SEG_5    AS seg_5,
+        mqs.SEG_6    AS seg_6,
+        mqs.SEG_7    AS seg_7,
+        mqs.SEG_8    AS seg_8,
+        mqs.SEG_9    AS seg_9,
+        mqs.SEG_10   AS seg_10
+    """
+
+    rows = fetch_all(f"""
+        SELECT
+            {query_columns}
+        FROM dbo.SMX_QUAL_SESSIONS mqs
+        WHERE mqs.raceid = :raceid
+          AND mqs.classid = :classid
+          AND mqs.riderid = :riderid
+          AND mqs.sportid = 3
+        ORDER BY mqs.[Group], mqs.[Session], mqs.Lap
+    """, params)
+
+    rank_rows = fetch_all(f"""
+        SELECT
+            {query_columns}
+        FROM dbo.SMX_QUAL_SESSIONS mqs
+        WHERE mqs.raceid = :raceid
+          AND mqs.classid = :classid
+          AND mqs.sportid = 3
     """, params)
 
     return _build_qualifying_session_detail(rows, rank_rows, riderid)

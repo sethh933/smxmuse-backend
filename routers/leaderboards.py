@@ -345,15 +345,21 @@ ORDER BY moto_wins DESC;
         SELECT
     m.RiderID AS riderid,
     rl.FullName AS fullname,
-    COUNT(*) AS moto_wins
-FROM SMX_MOTOS m
+    SUM(
+        CASE WHEN m.Moto1 = 1 THEN 1 ELSE 0 END +
+        CASE WHEN m.Moto2 = 1 THEN 1 ELSE 0 END
+    ) AS moto_wins
+FROM SMX_OVERALLS m
 JOIN Rider_List rl
     ON rl.RiderID = m.RiderID
-WHERE m.Result = 1
-  AND m.ClassID IN ({placeholders})
+WHERE m.ClassID IN ({placeholders})
 GROUP BY
     m.RiderID,
     rl.FullName
+HAVING SUM(
+    CASE WHEN m.Moto1 = 1 THEN 1 ELSE 0 END +
+    CASE WHEN m.Moto2 = 1 THEN 1 ELSE 0 END
+) > 0
 ORDER BY moto_wins DESC;
     """
 
