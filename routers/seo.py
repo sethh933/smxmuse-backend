@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, Response
 from sqlalchemy import text
 
 from db import engine
+from rider_seo import career_overviews, profile_metadata
 
 
 router = APIRouter()
@@ -91,6 +92,7 @@ def _page(
 def build_prerender_manifest():
     """Return lightweight, route-specific HTML data for the frontend build."""
     with engine.connect() as conn:
+        overviews = career_overviews(conn)
         riders = conn.execute(text("""
             WITH Appearances AS (
                 SELECT RiderID, RaceID FROM dbo.SX_MAINS
@@ -323,24 +325,13 @@ def build_prerender_manifest():
         rider_image = rider["ImageURL"].strip() if rider["ImageURL"] else None
         slug = _slugify(name)
         path = f"/rider/{slug}-{rider['RiderID']}" if slug else f"/rider/{rider['RiderID']}"
-        description = (
-            f"Explore {name}'s career stats, results history, and championship history "
-            "on smxmuse."
-        )
-        person = {"@context": "https://schema.org", "@type": "Person", "name": name, "url": _absolute_url(path)}
-        if rider["Country"]:
-            person["nationality"] = rider["Country"].strip()
-        if rider_image:
-            person["image"] = rider_image
-        pages.append(_page(
-            path,
-            f"{name} Rider Profile and Career Stats",
-            description,
-            name,
-            page_type="profile",
-            json_ld=person,
-            image=rider_image,
-        ))
+        overview = overviews.get(int(rider["RiderID"]), [])
+        metadata = profile_metadata(rider["RiderID"], name, rider["Country"], rider_image, overview)
+        page = _page(path, metadata["title"], metadata["description"], name,
+                     page_type="profile", json_ld=metadata["jsonLd"], image=rider_image)
+        page["careerOverview"] = overview
+        page["riderId"] = int(rider["RiderID"])
+        pages.append(page)
 
         # Use the remaining Azure deployment headroom for the most valuable
         # rider detail routes, which target high-intent results and standings
@@ -541,6 +532,34 @@ def build_sitemap_xml():
               )
         """)).mappings().all()
 
+        # Historical qualifying-only riders have useful profile tables even
+        # when the regular availability summary has no SX/MX/SMX appearances.
+        # Join actual races, as the profile's legacy aggregation does, so orphan
+        # records cannot create empty sitemap entries. Only add their profiles;
+        # qualifying appearances do not establish points-standings content.
+        legacy_profiles = conn.execute(text("""
+            WITH LegacyAppearances AS (
+                SELECT RiderID, RaceID FROM dbo.MX_QUAL_RACES
+                UNION ALL
+                SELECT RiderID, RaceID FROM dbo.MX_QUAL_OLD_FORMAT
+                UNION ALL
+                SELECT RiderID, RaceID FROM dbo.MX_CONSIS_OLD_FORMAT
+            )
+            SELECT DISTINCT rl.RiderID, rl.FullName
+            FROM dbo.Rider_List rl
+            INNER JOIN LegacyAppearances legacy ON legacy.RiderID = rl.RiderID
+            INNER JOIN dbo.Race_Table race ON race.RaceID = legacy.RaceID
+            WHERE rl.FullName IS NOT NULL
+              AND LTRIM(RTRIM(rl.FullName)) <> ''
+              AND COALESCE(rl.WMX, 0) = 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM dbo.RiderProfileAvailabilitySummary availability
+                  WHERE availability.RiderID = rl.RiderID
+                    AND (availability.HasSX = 1 OR availability.HasMX = 1
+                         OR availability.HasSMX = 1)
+              )
+        """)).mappings().all()
+
         races = conn.execute(text("""
             SELECT
                 rt.RaceID,
@@ -613,6 +632,11 @@ def build_sitemap_xml():
         _add_url(urlset, f"/rider/{segment}")
         _add_url(urlset, f"/rider/{segment}/results")
         _add_url(urlset, f"/rider/{segment}/points")
+
+    for rider in legacy_profiles:
+        slug = _slugify(rider["FullName"])
+        segment = f"{slug}-{rider['RiderID']}" if slug else str(rider["RiderID"])
+        _add_url(urlset, f"/rider/{segment}")
 
     for race in races:
         race_id = race["RaceID"]

@@ -14,6 +14,7 @@ from db import (
     fetch_all,
 )
 from error_utils import raise_http_error
+from rider_seo import career_overviews, profile_metadata
 
 
 router = APIRouter()
@@ -2369,7 +2370,13 @@ def get_rider_profile(rider_id: int, sport: str = "SX"):
                 if payload is None:
                     payload = {"stats": [], "qual_stats": []}
 
+            with engine.connect() as seo_conn:
+                overview = career_overviews(seo_conn, rider_id).get(rider_id, [])
+            metadata = profile_metadata(rider_id, rider_data["full_name"],
+                                        rider_data["country"], rider_data["image_url"], overview)
             return {
+                "careerOverview": overview,
+                "profileSeo": metadata,
                 "rider": rider_data,
                 "hasSX": has_sx,
                 "hasMX": has_mx,
