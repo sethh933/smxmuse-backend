@@ -19,7 +19,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 NOTES_TABLES_READY = False
-VALID_CATEGORIES = {"preRace", "raceRecap"}
+VALID_CATEGORIES = {"preRace", "raceRecap", "general"}
 
 GITHUB_DEPLOY_OWNER = os.getenv("GITHUB_DEPLOY_OWNER", "sethh933")
 GITHUB_DEPLOY_REPO = os.getenv("GITHUB_DEPLOY_REPO", "smxmuse-frontend")
@@ -67,16 +67,49 @@ class NoteSlideInput(BaseModel):
     body: str = ""
 
 
+class ArticlePreviewInput(BaseModel):
+    text: str = Field(max_length=500000)
+
+
+@router.post("/api/admin/article-preview/entities")
+def preview_article_entities(
+    article: ArticlePreviewInput,
+    x_admin_token: Optional[str] = Header(default=None),
+):
+    """Resolve prototype links without saving or publishing any content."""
+    _require_admin_token(x_admin_token)
+    with engine.connect() as conn:
+        return _resolve_entities(conn, article.text)
+
+
 class NoteSectionInput(BaseModel):
     heading: str
     slides: List[NoteSlideInput] = Field(default_factory=list)
 
 
+class ArticleColumn(BaseModel):
+    label: str
+    type: Literal["text", "number", "rider"] = "text"
+
+
+class ArticleBlock(BaseModel):
+    id: str
+    type: Literal["text", "table"]
+    heading: str = ""
+    text: str = ""
+    csv: str = ""
+    columns: List[ArticleColumn] = Field(default_factory=list)
+    rows: List[List[str]] = Field(default_factory=list)
+    caption: str = ""
+    sortColumn: int = Field(default=0, ge=0)
+    sortDirection: Literal["asc", "desc"] = "asc"
+
+
 class NoteInput(BaseModel):
     title: str
-    category: Literal["preRace", "raceRecap"]
+    category: Literal["preRace", "raceRecap", "general"]
     sport: str = "Motocross"
-    season: int
+    season: Optional[int] = None
     race_id: Optional[int] = None
     race: Optional[str] = None
     publish_date: date
@@ -85,6 +118,8 @@ class NoteInput(BaseModel):
     instagram_url: Optional[str] = None
     status: Literal["draft", "published"] = "draft"
     sections: List[NoteSectionInput] = Field(default_factory=list)
+    blocks: List[ArticleBlock] = Field(default_factory=list)
+    featured: bool = False
 
 
 def _slugify(value: str) -> str:
@@ -203,6 +238,10 @@ def _collect_note_input_text(note):
         for slide in section.slides or []:
             parts.append(slide.heading)
             parts.append(slide.body)
+
+    for block in note.blocks:
+        parts.extend([block.heading, block.text, block.caption])
+        parts.extend(cell for row in block.rows for cell in row)
 
     return "\n".join(part for part in parts if part)
 
@@ -371,6 +410,14 @@ def _ensure_notes_tables():
             END;
         """))
 
+        conn.execute(text("""
+            IF COL_LENGTH('dbo.ContentNotes', 'ArticleBlocks') IS NULL
+                ALTER TABLE dbo.ContentNotes ADD ArticleBlocks NVARCHAR(MAX) NULL;
+            IF COL_LENGTH('dbo.ContentNotes', 'Featured') IS NULL
+                ALTER TABLE dbo.ContentNotes ADD Featured BIT NOT NULL
+                    CONSTRAINT DF_ContentNotes_Featured DEFAULT 0;
+        """))
+
     NOTES_TABLES_READY = True
 
 
@@ -397,6 +444,7 @@ def _serialize_note(row, sections=None):
         "instagramUrl": row["InstagramUrl"],
         "status": row["Status"],
         "body": sections or [],
+        "featured": bool(row.get("Featured", False)),
     }
 
     return note
@@ -405,6 +453,9 @@ def _serialize_note(row, sections=None):
 def _serialize_note_with_entities(conn, row, include_edit_sections=False):
     sections = _load_sections(conn, row["NoteID"])
     note = _serialize_note(row, sections)
+    if row["Category"] == "general":
+        raw = conn.execute(text("SELECT ArticleBlocks FROM dbo.ContentNotes WHERE NoteID = :id"), {"id": row["NoteID"]}).scalar_one()
+        note["blocks"] = json.loads(raw or "[]")
 
     if include_edit_sections:
         note["sections"] = _load_edit_sections(conn, row["NoteID"])
@@ -538,6 +589,10 @@ def _rebuild_note_entity_links(conn, note_id):
             parts.append(slide.get("heading"))
             parts.append(slide.get("body"))
 
+    raw = conn.execute(text("SELECT ArticleBlocks FROM dbo.ContentNotes WHERE NoteID = :id"), {"id": note_id}).scalar_one()
+    for block in json.loads(raw or "[]"):
+        parts.extend([block.get("heading"), block.get("text"), block.get("caption")])
+        parts.extend(cell for record in block.get("rows", []) for cell in record)
     entities = _resolve_entities(conn, "\n".join(part for part in parts if part))
     _save_entity_links(conn, note_id, entities)
 
@@ -674,6 +729,25 @@ def _save_note_sections(conn, note_id, sections):
             })
 
 
+def _save_article_content(conn, note_id, note):
+    if not note.title.strip():
+        raise HTTPException(status_code=422, detail="A title is required.")
+    for block in note.blocks:
+        if block.type == "table":
+            if not block.columns or block.sortColumn >= len(block.columns):
+                raise HTTPException(status_code=422, detail="Import table data and choose a valid sort column.")
+            if any(len(row) != len(block.columns) for row in block.rows):
+                raise HTTPException(status_code=422, detail="Table rows must match the column count.")
+    if note.instagram_url and not re.match(r"^https://(?:www\.)?instagram\.com/", note.instagram_url, re.I):
+        raise HTTPException(status_code=422, detail="Use an https://www.instagram.com/ URL.")
+    if note.featured:
+        conn.execute(text("UPDATE dbo.ContentNotes SET Featured = 0 WHERE Featured = 1"))
+    conn.execute(text("UPDATE dbo.ContentNotes SET ArticleBlocks = :blocks, Featured = :featured WHERE NoteID = :id"), {
+        "id": note_id, "featured": note.featured,
+        "blocks": json.dumps([block.model_dump() for block in note.blocks]) if note.category == "general" else None,
+    })
+
+
 @router.get("/api/notes")
 def list_public_notes(category: Optional[str] = None, race_id: Optional[int] = None):
     _ensure_notes_tables()
@@ -740,7 +814,7 @@ def list_public_notes(category: Optional[str] = None, race_id: Optional[int] = N
                 Summary,
                 Tags,
                 InstagramUrl,
-                Status
+                Status, Featured
             FROM dbo.ContentNotes notes
             WHERE {' AND '.join(filters)}
             ORDER BY PublishDate DESC, NoteID DESC
@@ -768,7 +842,7 @@ def get_public_note(slug: str):
                 Summary,
                 Tags,
                 InstagramUrl,
-                Status
+                Status, Featured
             FROM dbo.ContentNotes
             WHERE Slug = :slug
               AND Status = 'published'
@@ -812,7 +886,7 @@ def list_admin_notes(
                 Summary,
                 Tags,
                 InstagramUrl,
-                Status
+                Status, Featured
             FROM dbo.ContentNotes
             {where_clause}
             ORDER BY UpdatedAt DESC, NoteID DESC
@@ -841,7 +915,7 @@ def get_admin_note(slug: str, x_admin_token: Optional[str] = Header(default=None
                 Summary,
                 Tags,
                 InstagramUrl,
-                Status
+                Status, Featured
             FROM dbo.ContentNotes
             WHERE Slug = :slug
         """), {"slug": slug}).mappings().first()
@@ -916,6 +990,7 @@ def create_admin_note(note: NoteInput, x_admin_token: Optional[str] = Header(def
             "status": note.status,
         }).scalar_one()
 
+        _save_article_content(conn, note_id, note)
         _save_note_sections(conn, note_id, note.sections)
         _save_entity_links(conn, note_id, _resolve_entities(conn, _collect_note_input_text(note)))
 
@@ -984,6 +1059,7 @@ def update_admin_note(
             "status": note.status,
         })
 
+        _save_article_content(conn, note_id, note)
         _save_note_sections(conn, note_id, note.sections)
         _save_entity_links(conn, note_id, _resolve_entities(conn, _collect_note_input_text(note)))
 
