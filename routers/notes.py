@@ -89,7 +89,7 @@ class NoteSectionInput(BaseModel):
 
 class ArticleColumn(BaseModel):
     label: str
-    type: Literal["text", "number", "rider"] = "text"
+    type: Literal["text", "number", "rider", "country", "countryName"] = "text"
 
 
 class ArticleBlock(BaseModel):
