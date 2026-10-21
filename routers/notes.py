@@ -90,6 +90,8 @@ class NoteSectionInput(BaseModel):
 
 class ArticleColumn(BaseModel):
     label: str
+    chartColor: Optional[str] = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    trendline: bool = False
     type: Literal["text", "number", "rider", "country", "countryName", "raceId", "raceDate", "raceText"] = "text"
 
 
