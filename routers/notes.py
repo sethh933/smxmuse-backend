@@ -89,7 +89,7 @@ class NoteSectionInput(BaseModel):
 
 class ArticleColumn(BaseModel):
     label: str
-    type: Literal["text", "number", "rider", "country", "countryName"] = "text"
+    type: Literal["text", "number", "rider", "country", "countryName", "raceId", "raceDate", "raceText"] = "text"
 
 
 class ArticleBlock(BaseModel):
@@ -734,6 +734,11 @@ def _save_article_content(conn, note_id, note):
         raise HTTPException(status_code=422, detail="A title is required.")
     for block in note.blocks:
         if block.type == "table":
+            race_ids = sum(column.type == "raceId" for column in block.columns)
+            if race_ids > 1 or (any(column.type in ("raceDate", "raceText") for column in block.columns) and race_ids != 1):
+                raise HTTPException(status_code=422, detail="Race links require exactly one Race ID column per table.")
+            if block.columns and all(column.type == "raceId" for column in block.columns):
+                raise HTTPException(status_code=422, detail="A table needs a visible column.")
             if not block.columns or block.sortColumn >= len(block.columns):
                 raise HTTPException(status_code=422, detail="Import table data and choose a valid sort column.")
             if any(len(row) != len(block.columns) for row in block.rows):
