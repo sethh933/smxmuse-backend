@@ -1,3 +1,4 @@
+import math
 from datetime import date
 import json
 import logging
@@ -94,13 +95,19 @@ class ArticleColumn(BaseModel):
 
 class ArticleBlock(BaseModel):
     id: str
-    type: Literal["text", "table"]
+    type: Literal["text", "table", "chart"]
     heading: str = ""
     text: str = ""
     csv: str = ""
     columns: List[ArticleColumn] = Field(default_factory=list)
     rows: List[List[str]] = Field(default_factory=list)
     caption: str = ""
+    chartType: Literal["line", "bar"] = "line"
+    xColumn: int = Field(default=0, ge=0)
+    yColumns: List[int] = Field(default_factory=list)
+    xLabel: str = ""
+    yLabel: str = ""
+    unit: str = ""
     sortColumn: int = Field(default=0, ge=0)
     sortDirection: Literal["asc", "desc"] = "asc"
 
@@ -733,6 +740,26 @@ def _save_article_content(conn, note_id, note):
     if not note.title.strip():
         raise HTTPException(status_code=422, detail="A title is required.")
     for block in note.blocks:
+        if block.type == "chart":
+            if not block.rows or not block.yColumns or block.xColumn >= len(block.columns):
+                raise HTTPException(status_code=422, detail="Import chart data and select label and value columns.")
+            if any(i < 0 or i >= len(block.columns) or i == block.xColumn for i in block.yColumns):
+                raise HTTPException(status_code=422, detail="Choose valid chart value columns distinct from the label column.")
+            if any(len(row) != len(block.columns) for row in block.rows):
+                raise HTTPException(status_code=422, detail="Chart rows must match the column count.")
+            for i in block.yColumns:
+                has_value = False
+                for row in block.rows:
+                    if row[i].strip():
+                        try:
+                            value = float(row[i].replace(",", ""))
+                            if not math.isfinite(value):
+                                raise ValueError()
+                            has_value = True
+                        except ValueError:
+                            raise HTTPException(status_code=422, detail="Chart values must be numbers or blank cells.")
+                if not has_value:
+                    raise HTTPException(status_code=422, detail="Each chart series needs at least one numeric value.")
         if block.type == "table":
             race_ids = sum(column.type == "raceId" for column in block.columns)
             if race_ids > 1 or (any(column.type in ("raceDate", "raceText") for column in block.columns) and race_ids != 1):
